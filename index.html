@@ -183,6 +183,31 @@ body{--fg:#f3eee4;--fg2:rgba(243,238,228,.72);--fg3:rgba(243,238,228,.5);--card:
 .hr .p,.days .pp,.nightrain,.infl i{color:#e7c27e}.infl i{background:#d9b26f}
 .iconbtn{background:rgba(243,238,228,.08)}
 html{background:#0d1a28}
+/* Regenbalken (Radar) */
+.rain2h{padding:8px 16px 4px;border-bottom:1px solid var(--line)}
+.rain2h svg{width:100%;height:54px;display:block}
+.rain2h .ax{display:flex;justify-content:space-between;font-size:11px;color:var(--fg3);margin-top:2px}
+/* Warnungen */
+.warn{border-radius:14px;padding:11px 14px;margin-bottom:12px;font-size:14px;line-height:1.35;cursor:pointer;border:1px solid transparent}
+.warn b{display:block;font-size:15px}
+.warn small{color:var(--fg2)}
+.warn .more{display:none;margin-top:6px;color:var(--fg2);font-size:13px;white-space:pre-line}
+.warn.open .more{display:block}
+.warn.minor{background:rgba(242,201,76,.16);border-color:rgba(242,201,76,.35)}
+.warn.moderate{background:rgba(242,140,40,.18);border-color:rgba(242,140,40,.45)}
+.warn.severe{background:rgba(230,70,60,.2);border-color:rgba(230,70,60,.5)}
+.warn.extreme{background:rgba(170,60,200,.24);border-color:rgba(170,60,200,.55)}
+.warn.hint{background:rgba(243,238,228,.06);border-color:rgba(243,238,228,.14)}
+/* Favoriten */
+.place-row{display:flex;align-items:center;justify-content:center;gap:8px}
+.star{background:none;border:0;color:var(--fg3);font-size:22px;line-height:1;cursor:pointer;padding:4px}
+.star.on{color:#d9b26f}
+.dots{display:flex;gap:6px;justify-content:center;margin-top:6px;height:6px}
+.dots i{width:6px;height:6px;border-radius:50%;background:rgba(243,238,228,.25)}
+.dots i.on{background:#f3eee4}
+.measured{font-size:12px;color:var(--fg3);margin-top:-2px;margin-bottom:4px}
+.results .fav-h{background:none;padding:6px 2px 4px;font-size:12px;color:var(--fg3);text-transform:uppercase;letter-spacing:.4px;cursor:default}
+.results .rm{float:right;color:var(--fg3);font-size:18px;line-height:1;padding:0 4px}
 .trow .tb i{background:rgba(243,238,228,.38)} .trow.us .tb i{background:#7ed6a0}
 </style>
 </head>
@@ -239,6 +264,12 @@ const BUCKETS = [{k:'d1', off:1, from:0, to:1, label:'0–1'}, {k:'d2', off:2, f
 const bucketFor = d => BUCKETS.find(b => d >= b.from && d <= b.to);
 
 const DEMO = location.hash === '#demo';
+const BUILD = '2026-11-18.7';   // bei jeder Änderung erhöhen (gleich wie version.txt)
+// Neue Version automatisch laden, sobald die App wieder geöffnet wird
+async function checkUpdate(){
+  try{ const v = (await fetch('version.txt?' + Date.now(), {cache:'no-store'}).then(r => r.ok ? r.text() : '')).trim();
+       if(v && v !== BUILD) location.reload(); }catch(e){}
+}
 
 /* ================= Hilfen ================= */
 const $ = s => document.querySelector(s);
@@ -310,9 +341,12 @@ function loadRadar(lat, lon){
 }
 
 async function loadAll(lat, lon, force){
-  const radarP = DEMO ? Promise.resolve(null) : loadRadar(lat, lon);
+  const live = DEMO ? [null,null,null] : [loadRadar(lat, lon),
+    getJSON(`https://api.brightsky.dev/alerts?lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}`).catch(() => null),
+    getJSON(`https://api.brightsky.dev/current_weather?lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}&max_dist=20000`).catch(() => null)];
   const d0 = await loadAll2(lat, lon, force);
-  return {...d0, radar: await radarP};
+  const [radar, alerts, current] = await Promise.all(live);
+  return {...d0, radar, alerts, current};
 }
 async function loadAll2(lat, lon, force){
   const key = `wx:${lat.toFixed(2)},${lon.toFixed(2)}`, skey = `wxs:${lat.toFixed(2)},${lon.toFixed(2)}`;
@@ -455,7 +489,7 @@ async function computeAllStats(lat, lon, offSec){
     const dayStarts = [];
     for(let i=1;i<D.n;i++) if(D.lh[i] === 0 && D.past[i] && i+23 < D.n && D.past[i+23]) dayStarts.push(i);
     const use = dayStarts.slice(-TRACK_DAYS), acc = {ours:[0,0], avg:[0,0]}, per = {};
-    let days = 0;
+    let days = 0; const rain = {days:0, ours:0, avg:0, per:{}};
     for(const s0 of use){
       if(s0 < 20*24) continue;
       const Sw = statsWindow(D, Math.max(0, s0 - WINDOW_DAYS*24), s0, true), Ww = weightsFrom(Sw, hilly).d1;
@@ -470,10 +504,25 @@ async function computeAllStats(lat, lon, offSec){
         acc.ours[0] += Math.abs(sv/sw - o); acc.ours[1]++; acc.avg[0] += Math.abs(mean(raw) - o); acc.avg[1]++; used++;
       }
       if(used >= 18) days++;
+      // Regen ja/nein zwischen 8 und 20 Uhr (ab 0,5 mm)
+      let o = 0, on = 0; const ms = {};
+      for(let i=s0;i<s0+24;i++){ const h = D.lh[i]; if(h <= WIN_START || h > WIN_END) continue;
+        if(D.obsP[i] != null){ o += D.obsP[i]; on++; }
+        for(const m of MODELS){ const f = D.per[m.id]?.precipitation_previous_day1?.[i]; if(f != null){ (ms[m.id] ||= [0,0]); ms[m.id][0] += f; ms[m.id][1]++; } } }
+      const full = Object.entries(ms).filter(([id,v]) => v[1] >= 10);
+      if(on >= 10 && full.length >= 3){
+        const wetO = o >= 0.5; rain.days++;
+        let sw = 0, sv = 0; for(const [id,v] of full){ const w = Ww[id] ? Ww[id].p : 1; sw += w; sv += w*v[0]; }
+        if((sv/sw >= 0.5) === wetO) rain.ours++;
+        if((mean(full.map(([id,v]) => v[0])) >= 0.5) === wetO) rain.avg++;
+        for(const [id,v] of full){ (rain.per[id] ||= 0); if((v[0] >= 0.5) === wetO) rain.per[id]++; }
+      }
     }
     if(days >= 5){
       const pm = Object.entries(per).map(([id,v]) => ({id, mae:v[0]/v[1]})).sort((a,b)=>a.mae-b.mae);
       track = {days, ours: acc.ours[0]/acc.ours[1], avg: acc.avg[0]/acc.avg[1], best: pm[0], models: pm};
+      if(rain.days >= 5){ const bp = Object.entries(rain.per).sort((a,b) => b[1]-a[1])[0];
+        track.rain = {days: rain.days, ours: rain.ours, avg: rain.avg, best: bp ? {id: bp[0], hits: bp[1]} : null}; }
     }
   }
   return {W, track, cityBias, nightBias, elev, hilly,
@@ -593,6 +642,18 @@ function build(data){
     }
   }
 
+  // ===== Gemessene Temperatur für „Jetzt“ (nächste DWD-Station, max. 20 km, ähnliche Höhe, max. 90 Min. alt) =====
+  let curObs = null;
+  const CW = data.current;
+  if(CW && CW.weather && CW.weather.temperature != null && CW.sources && CW.sources[0]){
+    const src = CW.sources.find(x => x.id === CW.weather.source_id) || CW.sources[0];
+    const age = (Date.now() - Date.parse(CW.weather.timestamp))/60e3;
+    const elev = ST && ST.elev;
+    if(src.distance <= 20000 && age <= 90 && (elev == null || src.height == null || Math.abs(src.height - elev) <= 150))
+      curObs = {t: CW.weather.temperature, name: umlaut(src.station_name), dist: src.distance/1000, age};
+  }
+  if(curObs && hourly[nowIdx]) hourly[nowIdx].temp = curObs.t;
+
   // Tage (Fenster 8–20 Uhr)
   const dates = [...new Set(time.map(t=>t.slice(0,10)))].slice(0, DAYS);
   const days = dates.map((d, di) => {
@@ -655,7 +716,7 @@ function build(data){
   for(const m of MODELS){ const D = dailyPer[m.id]; if(D && D.sunrise && D.sunrise[0]){ sun = {rise:D.sunrise, set:D.sunset}; break; } }
   if(!sun && fc.daily && fc.daily.sunrise) sun = {rise: fc.daily.sunrise, set: fc.daily.sunset};
 
-  return {hourly, days, cur, nowIdx, W, ST, avail, per, members, sun, now, meta:fc, NC};
+  return {hourly, days, cur, nowIdx, W, ST, avail, per, members, sun, now, meta:fc, NC, curObs, alerts: data.alerts};
 }
 
 // Radar auswerten: Werte in 0,01 mm je 5 Min.; Ort = latlon_position im Raster, dazu Nachbarschaft ±1 Pixel
@@ -681,7 +742,7 @@ function nowcast(radar, offSec){
     frames, rateNow, nearNow: cur.near*12, last,
     // Summe für die Stunde, die zur Ortszeit tLocal endet (wie Open-Meteo)
     sumFor(tLocal){ const end = Date.parse(tLocal + ':00Z') - offSec*1000, start = end - 3600e3;
-      if(end > last + 60e3 || start < frames[0].ms - 5*60e3) return null;
+      if(end > last + 60e3 || end <= frames[0].ms) return null;
       return frames.filter(f => f.ms > start && f.ms <= end).reduce((s,f) => s + f.mm, 0); },
     // nächster Wechsel trocken/nass in der Radar-Vorhersage
     change(){ const wet = rateNow >= 0.1; const f = frames.find(f => f.ms > nowMs && ((f.mm*12 >= 0.1) !== wet));
@@ -690,6 +751,8 @@ function nowcast(radar, offSec){
       return {wet: !wet, at: toLocal(f.ms).slice(11,16), light: peak < 0.5}; },
   };
 }
+
+const umlaut = n => String(n||'').replace(/Ae/g,'Ä').replace(/Oe/g,'Ö').replace(/Ue/g,'Ü').replace(/ae/g,'ä').replace(/oe/g,'ö').replace(/(?<!q)ue/g,'ü');
 
 /* ================= Wetterzustand + Icons ================= */
 function condition({cloud, psum, pprob, thunder, fog, temp, isDay, hourly}){
@@ -774,7 +837,7 @@ function render(place, R){
     const dot = i===0 && !afterWin && c.temp!=null ? `<b style="left:calc(${clamp((c.temp-gMin)/span*100,0,100)}% - 4.5px)"></b>` : '';
     const pp = d.pprob>=0.15 ? Math.round(d.pprob*10)*10+'%' : '';
     const night = d.range && d.range.width >= 5 ? `<div class="nightrain unsure">unsicher</div>`
-                : d.nightP!=null && d.nightP>=1 ? `<div class="nightrain">Regen nachts</div>` : '';
+                : d.nightP!=null && d.nightP>=1 && d.pprob < 0.3 && d.psum < 0.5 ? `<div class="nightrain">Regen nachts</div>` : '';
     return `<div class="row" data-i="${i}"><div class="d">${dayName(d.d,i)}${night}</div>${icon(d.cond.k)}<div class="pp">${pp}</div>
       <div class="mn">${r0(d.tmin)}°</div><div class="bar"><i style="left:${l}%;width:${Math.max(w,3)}%;background:${grad}"></i>${dot}</div><div class="mx">${r0(d.tmax)}°</div></div>
       <div class="detail" id="det${i}">${dayDetail(d, i)}</div>`;
@@ -786,19 +849,23 @@ function render(place, R){
   const pToday = hlDay.psum;
 
   $('#app').innerHTML = `
-  <div class="hero">
-    <div class="place">${esc(place.name)}</div>
+  <div class="hero" id="hero">
+    <div class="place-row"><div class="place">${esc(place.name)}</div><button class="star ${isFav(place)?'on':''}" id="star" aria-label="Favorit">${isFav(place)?'★':'☆'}</button></div>
+    ${favDots(place)}
     <div class="temp">${r0(c.temp)}°</div>
+    ${R.curObs ? `<div class="measured">gemessen in ${esc(R.curObs.name)}${R.curObs.dist >= 1 ? ` (${fmt1(R.curObs.dist)} km)` : ''}</div>` : ''}
     <div class="cond">${hc.txt}</div>
     <div class="hl">H: ${r0(hlDay.tmax)}°  T: ${r0(hlDay.tmin)}°</div>
     <div class="sub">${hlLabel} · Konsens aus ${R.avail.length} Modellen</div>
     <div class="updated">${updatedTxt()}</div>
   </div>
 
+  ${warnBlock(R)}
   ${state.warn ? `<div class="err">${state.warn}</div>`:''}
 
   <div class="card">
     <div class="note">${summary}</div>
+    ${rainChart(R)}
     <div class="hours">${hrs}</div>
   </div>
 
@@ -848,6 +915,9 @@ function render(place, R){
   Stand: ${R.meta.generated_at_local || R.now.replace('T',' ')} · Modelllauf-Abruf ${new Date(state.fetched||Date.now()).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'})}</div>`;
 
   document.querySelectorAll('.days .row').forEach(r => r.onclick = () => $('#det'+r.dataset.i).classList.toggle('open'));
+  document.querySelectorAll('.warn').forEach(w => w.onclick = () => w.classList.toggle('open'));
+  $('#star').onclick = () => { toggleFav(place); render(place, R); };
+  swipeFavs();
   initMap(place);
 }
 
@@ -880,6 +950,63 @@ function dayDetail(d, i){
     <div class="mrow head" style="margin-top:8px"><div>Modell</div><div class="r">Tief</div><div></div><div>Hoch</div><div class="r">Regen</div><div class="r">Einfluss</div></div>
     ${rows}
     <div class="mrow cons"><div class="n">Vorhersage gesamt</div><div class="r">${r0(d.tmin)}°</div>${bar(d.tmin,d.tmax)}<div>${r0(d.tmax)}°</div><div class="r">${fmt1(d.psum)}</div><div class="r">100%</div></div>`;
+}
+
+// Regenbalken: nur sichtbar, wenn in den nächsten 2 Stunden laut Radar Regen fällt
+function rainChart(R){
+  const NC = R.NC; if(!NC) return '';
+  const now = Date.now(), fr = NC.frames.filter(f => f.ms >= now - 5*60e3 && f.ms <= now + 120*60e3);
+  if(fr.length < 6 || !fr.some(f => f.mm*12 >= 0.1)) return '';
+  const W = 300, H = 54, bw = W/fr.length;
+  const hgt = mmh => mmh <= 0 ? 0 : Math.min(1, Math.log10(1 + mmh*4)/Math.log10(41)) * (H-6);   // 10 mm/h = voll
+  const bars = fr.map((f,i) => { const h = hgt(f.mm*12); return h ? `<rect x="${(i*bw+1).toFixed(1)}" y="${(H-h).toFixed(1)}" width="${(bw-2).toFixed(1)}" height="${h.toFixed(1)}" rx="1.5" fill="${f.ms > now ? '#7fb8e6' : '#a9d0f0'}"/>` : ''; }).join('');
+  const grid = [0.25,0.5,0.75].map(q => `<line x1="0" x2="${W}" y1="${(H-6)*(1-q)+6}" y2="${(H-6)*(1-q)+6}" stroke="rgba(243,238,228,.08)"/>`).join('');
+  const t = ms => new Date(ms).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'});
+  return `<div class="rain2h"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${grid}${bars}</svg>
+    <div class="ax"><span>Jetzt</span><span>${t(now+30*60e3)}</span><span>${t(now+60*60e3)}</span><span>${t(now+90*60e3)}</span><span>${t(now+120*60e3)}</span></div></div>`;
+}
+
+// Warnungen: in Deutschland amtlich (DWD), sonst eigene Hinweise aus den Modellen
+function warnBlock(R){
+  const fmtT = iso => { const d = new Date(iso); return WD[d.getDay()] + ' ' + d.toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}); };
+  const A = R.alerts && R.alerts.alerts;
+  if(A){
+    const now = Date.now(), rank = {extreme:4, severe:3, moderate:2, minor:1};
+    const act = A.filter(a => Date.parse(a.expires || a.onset) > now && a.status === 'actual' && a.category === 'met')
+                 .sort((a,b) => (rank[b.severity]||0) - (rank[a.severity]||0)).slice(0,3);
+    return act.map(a => `<div class="warn ${a.severity}"><b>⚠︎ ${esc(cap(a.event_de))}</b><small>DWD · ${Date.parse(a.onset) > now ? 'ab ' + fmtT(a.onset) + ' ' : ''}bis ${fmtT(a.expires)} · antippen für Details</small>
+      <div class="more">${esc(a.description_de || '')}${a.instruction_de ? '\n\n' + esc(a.instruction_de) : ''}</div></div>`).join('');
+  }
+  // Ausland: Hinweise aus dem Modell-Konsens der nächsten 48 Stunden
+  const H = R.hourly.slice(R.nowIdx, R.nowIdx + 48), out = [];
+  const g = Math.max(...H.map(h => h.gust || 0)); if(g >= 65) out.push(`Sturmböen bis ${r0(g)} km/h möglich`);
+  let rr = 0; for(let i=0;i<H.length;i++){ let s=0; for(let j=i;j<Math.min(H.length,i+24);j++) s += H[j].prcp || 0; rr = Math.max(rr, s); }
+  if(rr >= 25) out.push(`Starkregen möglich, bis ${r0(rr)} mm in 24 Stunden`);
+  if(H.some(h => h.thunder >= 0.4)) out.push('Gewitter möglich');
+  const tx = Math.max(...H.map(h => h.temp ?? -99)), tn = Math.min(...H.map(h => h.temp ?? 99));
+  if(tx >= 32) out.push(`Hitze bis ${r0(tx)}°`); if(tn <= -10) out.push(`Strenger Frost bis ${r0(tn)}°`);
+  if(!out.length) return '';
+  return `<div class="warn hint"><b>Hinweis: ${out.join(' · ')}</b><small>Aus den Wettermodellen, keine amtliche Warnung · antippen</small>
+    <div class="more">Für diesen Ort liegen keine amtlichen Warnungen vor, weil der Deutsche Wetterdienst nur Deutschland abdeckt. Amtliche Warnungen für Europa: meteoalarm.org</div></div>`;
+}
+const cap = t => { t = String(t||'').toLowerCase(); return t.charAt(0).toUpperCase() + t.slice(1); };
+
+// Favoriten
+const favs = () => store.get('wx:favs') || [];
+const sameP = (a,b) => Math.abs(a.lat-b.lat) < 0.01 && Math.abs(a.lon-b.lon) < 0.01;
+const isFav = p => favs().some(f => sameP(f,p));
+function toggleFav(p){ const f = favs(); store.set('wx:favs', isFav(p) ? f.filter(x => !sameP(x,p)) : f.concat([{name:p.name, lat:p.lat, lon:p.lon, region:p.region}])); }
+function favDots(p){ const f = favs(); if(f.length < 2) return ''; const i = f.findIndex(x => sameP(x,p));
+  return `<div class="dots">${f.map((x,k) => `<i class="${k===i?'on':''}"></i>`).join('')}</div>`; }
+function swipeFavs(){
+  const el = $('#hero'); if(!el) return; let x0 = null, y0 = null;
+  el.addEventListener('touchstart', e => { x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; }, {passive:true});
+  el.addEventListener('touchend', e => {
+    if(x0 == null) return; const dx = e.changedTouches[0].clientX - x0, dy = e.changedTouches[0].clientY - y0; x0 = null;
+    const f = favs(); if(f.length < 2 || Math.abs(dx) < 60 || Math.abs(dy) > Math.abs(dx)) return;
+    let i = f.findIndex(x => sameP(x, state.place)); i = (i < 0 ? 0 : i + (dx < 0 ? 1 : -1) + f.length) % f.length;
+    setPlace(f[i]);
+  });
 }
 
 function certainty(d){
@@ -916,9 +1043,16 @@ function trackBlock(R){
     const best = ALL_MODELS.find(m => m.id === T.best.id);
     const rows = [['Diese Seite', T.ours, 'us'], [`Bestes Einzelmodell (${best ? best.name : T.best.id})`, T.best.mae, ''], ['Durchschnitt aller Modelle', T.avg, '']];
     const mx = Math.max(...rows.map(r => r[1]));
-    html += `<div class="dsec" style="padding:0 16px">Trefferbilanz · letzte ${T.days} Tage</div><div class="track">` +
+    html += `<div class="dsec" style="padding:0 16px">Trefferbilanz Temperatur · letzte ${T.days} Tage</div><div class="track">` +
       rows.map(r => `<div class="trow ${r[2]}"><div>${r[0]}</div><div class="tb"><i style="width:${Math.round(r[1]/mx*100)}%"></i></div><div class="r">±${fmt2(r[1])}°</div></div>`).join('') +
-      `</div><div class="explain" style="padding-top:2px">${T.ours < T.avg ? `<b>${Math.round((1 - T.ours/T.avg)*100)} % genauer</b> als der Durchschnitt aller Modelle. ` : ''}Gezeigt ist die mittlere Abweichung der Temperatur für den nächsten Tag, Stunde für Stunde (kürzer ist besser). Für jeden Tag wurde nur genutzt, was vorher bekannt war.</div>`;
+      `</div><div class="explain" style="padding-top:2px">${T.ours < T.avg ? `<b>${Math.round((1 - T.ours/T.avg)*100)} % genauer</b> als der Durchschnitt aller Modelle. ` : ''}Mittlere Abweichung für den nächsten Tag, Stunde für Stunde (kürzer ist besser). Für jeden Tag wurde nur genutzt, was vorher bekannt war.</div>`;
+    if(T.rain){
+      const r = T.rain, bm = r.best && ALL_MODELS.find(m => m.id === r.best.id);
+      const rr = [['Diese Seite', r.ours, 'us'], [`Bestes Einzelmodell (${bm ? bm.name : '–'})`, r.best ? r.best.hits : 0, ''], ['Durchschnitt aller Modelle', r.avg, '']];
+      html += `<div class="dsec" style="padding:4px 16px 0">Trefferbilanz Regen · letzte ${r.days} Tage</div><div class="track">` +
+        rr.map(x => `<div class="trow ${x[2]}"><div>${x[0]}</div><div class="tb"><i style="width:${Math.round(x[1]/r.days*100)}%"></i></div><div class="r">${x[1]}/${r.days}</div></div>`).join('') +
+        `</div><div class="explain" style="padding-top:2px">An so vielen Tagen stimmte „Regen“ oder „trocken“ zwischen 8 und 20 Uhr (ab 0,5 mm). Länger ist besser.</div>`;
+    }
   }
   return html;
 }
@@ -1069,8 +1203,12 @@ function ptrDone(){ ptr.classList.remove('spin'); ptr.style.opacity = 0; ptr.sty
 $('#btnSearch').onclick = () => { $('#sheet').classList.add('open'); showRecent(); setTimeout(()=>$('#q').focus(), 50); };
 $('#close').onclick = () => $('#sheet').classList.remove('open');
 function showRecent(){
-  const rec = store.get('wx:recent') || [DEFAULT_PLACE];
-  $('#results').innerHTML = rec.map((p,i)=>`<div data-r="${i}">${esc(p.name)}<small>${esc(p.region||'Zuletzt verwendet')}</small></div>`).join('');
+  const F = favs(), rec = (store.get('wx:recent') || [DEFAULT_PLACE]).filter(p => !F.some(f => sameP(f,p)));
+  $('#results').innerHTML =
+    (F.length ? `<div class="fav-h">Favoriten</div>` + F.map((p,i)=>`<div data-f="${i}"><span class="rm" data-x="${i}">×</span>★ ${esc(p.name)}<small>${esc(p.region||'')}</small></div>`).join('') : '') +
+    (rec.length ? `<div class="fav-h">Zuletzt</div>` + rec.map((p,i)=>`<div data-r="${i}">${esc(p.name)}<small>${esc(p.region||'')}</small></div>`).join('') : '') +
+    (F.length ? '' : `<div class="fav-h" style="text-transform:none">Tipp: Mit dem ☆ neben dem Ortsnamen speicherst du Favoriten und wechselst dann durch Wischen.</div>`);
+  $('#results').querySelectorAll('[data-f]').forEach(el => el.onclick = e => { if(e.target.dataset.x != null){ e.stopPropagation(); toggleFav(F[+e.target.dataset.x]); showRecent(); } else choose(F[+el.dataset.f]); });
   $('#results').querySelectorAll('[data-r]').forEach(el => el.onclick = () => choose(rec[+el.dataset.r]));
 }
 function choose(p){
@@ -1111,6 +1249,7 @@ function alertBox(msg){ state.warn = msg; if(state.res) render(state.place, stat
 // Neu laden, wenn die App wieder in den Vordergrund kommt
 document.addEventListener('visibilitychange', () => {
   if(document.hidden) return;
+  checkUpdate();
   if(state.fetched && Date.now()-state.dataTime > CACHE_MIN*60e3) load();
   else { const u = document.querySelector('.updated'); if(u) u.textContent = updatedTxt(); }
 });
@@ -1160,6 +1299,7 @@ function makeDemo(){
 
 /* ================= Start ================= */
 state.place = store.get('wx:place') || DEFAULT_PLACE;
+checkUpdate();
 load();
 </script>
 </body>

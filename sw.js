@@ -1,7 +1,7 @@
 // Service Worker: lässt die Wetter-App sofort starten und offline den letzten Stand zeigen.
 // Seite selbst: erst Netz (damit Updates sofort ankommen), sonst Cache.
 // Bibliotheken & Icons: aus dem Cache. Wetterdaten: nie hier (die App speichert sie selbst).
-const CACHE = 'wetter-v4';
+const CACHE = 'wetter-v5';
 const SHELL = ['./', 'index.html', 'manifest.json', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
@@ -23,6 +23,7 @@ self.addEventListener('fetch', e => {
     return;
   }
   // Messwerte (data/…): immer frisch aus dem Netz, offline aus dem Cache
+  if(sameOrigin && url.pathname.endsWith('version.txt')) return;   // immer direkt aus dem Netz
   if(sameOrigin && url.pathname.includes('/data/')){
     e.respondWith(fetch(req).then(r => { const c = r.clone(); caches.open(CACHE).then(x => x.put(req, c)); return r; })
       .catch(() => caches.match(req, {ignoreSearch:true})));
