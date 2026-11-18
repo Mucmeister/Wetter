@@ -610,7 +610,8 @@ function render(place, R){
     const grad = `linear-gradient(90deg, ${tempColor(d.tmin)}, ${tempColor(d.tmax)})`;
     const dot = i===0 && !afterWin && c.temp!=null ? `<b style="left:calc(${clamp((c.temp-gMin)/span*100,0,100)}% - 4.5px)"></b>` : '';
     const pp = d.pprob>=0.15 ? Math.round(d.pprob*10)*10+'%' : '';
-    const night = d.range && d.range.width >= 4.5 + 0.6*Math.max(0, i-2) ? `<div class="nightrain unsure">unsicher</div>`
+    // „unsicher“ nur in den ersten 6 Tagen: danach ist jede Vorhersage unsicher, der Hinweis wäre nur Rauschen
+    const night = d.range && i <= 5 && d.range.width >= 4.5 + 0.6*Math.max(0, i-2) ? `<div class="nightrain unsure">unsicher</div>`
                 : d.nightP!=null && d.nightP>=1 && d.pprob < 0.3 && d.psum < 0.5 ? `<div class="nightrain">Regen nachts</div>` : '';
     return `<div class="row" data-i="${i}"><div class="d">${dayName(d.d,i)}${night}</div>${icon(d.cond.k)}<div class="pp">${pp}</div>
       <div class="mn">${r0(d.tmin)}°</div><div class="bar"><i style="left:${l}%;width:${Math.max(w,3)}%;background:${grad}"></i>${dot}</div><div class="mx">${r0(d.tmax)}°</div></div>
