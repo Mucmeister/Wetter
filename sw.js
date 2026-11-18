@@ -1,7 +1,7 @@
 // Service Worker: lässt die Wetter-App sofort starten und offline den letzten Stand zeigen.
 // Seite selbst: erst Netz (damit Updates sofort ankommen), sonst Cache.
 // Bibliotheken & Icons: aus dem Cache. Wetterdaten: nie hier (die App speichert sie selbst).
-const CACHE = 'wetter-v2';
+const CACHE = 'wetter-v3';
 const SHELL = ['./', 'index.html', 'manifest.json', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
