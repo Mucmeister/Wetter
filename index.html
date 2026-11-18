@@ -7,7 +7,11 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Wetter">
-<meta name="theme-color" content="#2b5a8c">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#2f6aa8">
+<meta name="format-detection" content="telephone=no">
 <title>Wetter – Modell-Konsens</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <style>
@@ -17,7 +21,11 @@
   --bg1:#2f6aa8; --bg2:#5d9bd6;
 }
 *{box-sizing:border-box;margin:0;padding:0}
+html{background:#2f6aa8;-webkit-text-size-adjust:100%}
 html,body{min-height:100%}
+/* App-Gefühl: kein Tipp-Blitzen, keine Textauswahl, kein Doppeltipp-Zoom */
+body{-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none;touch-action:manipulation}
+input{-webkit-user-select:text;user-select:text}
 body{
   font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",Arial,sans-serif;
   color:var(--fg); background:var(--bg2);
@@ -99,7 +107,25 @@ body.snow{--bg1:#6f8299;--bg2:#b4c3d4}
 .tile{padding:0 16px 14px}
 .tile .v{font-size:30px;font-weight:400;margin-top:8px}
 .tile .s{font-size:13px;color:var(--fg2);margin-top:6px;line-height:1.35}
-#map{height:320px;background:#1b2a3a}
+#map{height:300px;background:#1b2a3a}
+.mapwrap{position:relative}
+.mapwrap .expand{position:absolute;right:10px;top:10px;z-index:500;width:34px;height:34px;border-radius:50%;border:0;
+  background:rgba(20,30,45,.65);color:#fff;display:grid;place-items:center;-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}
+.mapwrap .expand svg{width:16px;height:16px}
+.mapcard.full{position:fixed;inset:0;z-index:2000;margin:0;border-radius:0;display:flex;flex-direction:column;
+  background:#132033;padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)}
+.mapcard.full h3{display:none}
+.mapcard.full .mapwrap{flex:1}
+.mapcard.full #map{height:100%}
+.mapcard.full .expand{top:12px}
+body.mapopen{overflow:hidden}
+/* Ziehen zum Aktualisieren */
+#ptr{position:fixed;left:50%;top:calc(env(safe-area-inset-top) + 6px);z-index:1500;width:34px;height:34px;margin-left:-17px;border-radius:50%;
+  background:rgba(255,255,255,.22);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);display:grid;place-items:center;
+  opacity:0;transform:translateY(-50px);pointer-events:none}
+#ptr svg{width:18px;height:18px}
+#ptr.spin svg{animation:s .8s linear infinite}
+.updated{font-size:12px;color:var(--fg3);margin-top:4px}
 .mapbar{display:flex;gap:8px;padding:10px 16px 12px;flex-wrap:wrap;align-items:center;font-size:13px;color:var(--fg2)}
 .chip{background:rgba(255,255,255,.16);border:0;color:#fff;padding:6px 11px;border-radius:14px;font-size:13px;font-weight:600;cursor:pointer}
 .chip.on{background:#fff;color:#1d3b5e}
@@ -135,6 +161,7 @@ body.snow{--bg1:#6f8299;--bg2:#b4c3d4}
 </style>
 </head>
 <body>
+<div id="ptr"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"><path d="M20 12a8 8 0 1 1-2.4-5.7"/><path d="M20 4v5h-5"/></svg></div>
 <div class="wrap">
   <div class="top">
     <button class="iconbtn" id="btnLoc" aria-label="Aktueller Standort"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 4 20l8-4 8 4z" transform="rotate(45 12 12)"/></svg></button>
@@ -238,16 +265,25 @@ function urls(lat, lon){
   };
 }
 
-async function loadAll(lat, lon){
+async function loadAll(lat, lon, force){
   const key = `wx:${lat.toFixed(2)},${lon.toFixed(2)}`;
   const c = store.get(key);
-  if(c && Date.now()-c.t < CACHE_MIN*60e3) return c.d;
-  if(DEMO) return makeDemo();
+  if(!force && c && Date.now()-c.t < CACHE_MIN*60e3){ state.dataTime = c.t; return c.d; }
+  if(DEMO){ state.dataTime = Date.now(); return makeDemo(); }
   const u = urls(lat, lon);
   const [fc, ens, prev] = await Promise.allSettled([getJSON(u.fc), getJSON(u.ens), getJSON(u.prev)]);
-  if(fc.status!=='fulfilled') throw fc.reason;
+  if(fc.status!=='fulfilled'){
+    // Offline oder Server-Fehler: letzten Stand zeigen, falls vorhanden
+    if(c){ state.dataTime = c.t; state.stale = true; return c.d; }
+    throw fc.reason;
+  }
+  state.dataTime = Date.now(); state.stale = false;
   const d = {fc: fc.value, ens: ens.status==='fulfilled'? ens.value : null, prev: prev.status==='fulfilled'? prev.value : null,
              errs: [ens, prev].filter(x=>x.status!=='fulfilled').map(x=>String(x.reason&&x.reason.message||x.reason))};
+  try{
+    Object.keys(localStorage).filter(k => k.startsWith('wx:') && /\d/.test(k) && k!==key)
+      .map(k => ({k, t:(store.get(k)||{}).t||0})).sort((a,b)=>b.t-a.t).slice(2).forEach(x => localStorage.removeItem(x.k));
+  }catch(e){}
   store.set(key, {t:Date.now(), d});
   return d;
 }
@@ -496,13 +532,16 @@ const tempColor = t => { // für Temperaturbalken
 let state = {place:null, res:null, mapLayers:null};
 
 function render(place, R){
+  $('#btnLoc').style.opacity = 1;
   const c = R.cur, today = R.days[0];
   const hc = hourCond(c);
   // Hintergrund
   const cls = [];
   if(!c.isDay) cls.push('night');
   if(['rain','thunder','showers'].includes(hc.k)) cls.push('rain'); else if(hc.k.startsWith('snow')) cls.push('snow'); else if(c.cloud>75 || hc.k==='fog') cls.push('overcast');
-  document.body.className = cls.join(' ');
+  document.body.className = cls.join(' ') + (document.body.classList.contains('mapopen') ? ' mapopen' : '');
+  requestAnimationFrame(() => { const c1 = getComputedStyle(document.body).getPropertyValue('--bg1').trim();
+    if(c1){ document.querySelector('meta[name=theme-color]').setAttribute('content', c1); document.documentElement.style.background = c1; } });
 
   const afterWin = +R.now.slice(11,13) >= WIN_END;
   const hlDay = afterWin && R.days[1] ? R.days[1] : today;
@@ -546,6 +585,7 @@ function render(place, R){
     <div class="cond">${hc.txt}</div>
     <div class="hl">H: ${r0(hlDay.tmax)}°  T: ${r0(hlDay.tmin)}°</div>
     <div class="sub">${hlLabel} · Konsens aus ${R.avail.length} Modellen</div>
+    <div class="updated">${updatedTxt()}</div>
   </div>
 
   ${state.warn ? `<div class="err">${state.warn}</div>`:''}
@@ -567,9 +607,10 @@ function render(place, R){
     <div class="card"><h3>Sonne</h3><div class="tile"><div class="v" style="font-size:22px;margin-top:12px">${sunTxt}</div><div class="s">Aufgang / Untergang · Luftfeuchte ${r0(c.rh)} %</div></div></div>
   </div>
 
-  <div class="card">
+  <div class="card mapcard">
     <h3>${svgRadar()} Niederschlagsradar</h3>
-    <div id="map"></div>
+    <div class="mapwrap"><div id="map"></div>
+      <button class="expand" id="mapToggle" aria-label="Karte vergrößern"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/></svg></button></div>
     <div class="mapbar">
       <button class="chip on" data-l="radar">Radar</button>
       <button class="chip" data-l="nowcast">+2 h Prognose</button>
@@ -681,7 +722,20 @@ let map;
 function initMap(place){
   if(typeof L === 'undefined') { $('#map').innerHTML = '<div class="loading" style="padding:120px 0">Karte nicht verfügbar</div>'; return; }
   if(map){ map.remove(); map = null; }
-  map = L.map('map', {zoomControl:false, attributionControl:false}).setView([place.lat, place.lon], 8);
+  document.body.classList.remove('mapopen');
+  // In der Seite ist die Karte fest (sonst blockiert sie das Scrollen); per Tipp öffnet sie im Vollbild.
+  map = L.map('map', {zoomControl:false, attributionControl:false, dragging:false, touchZoom:false, doubleClickZoom:false,
+    scrollWheelZoom:false, boxZoom:false, keyboard:false, tap:false}).setView([place.lat, place.lon], 7);
+  const card = document.querySelector('.mapcard'), tog = $('#mapToggle');
+  const setFull = full => {
+    card.classList.toggle('full', full); document.body.classList.toggle('mapopen', full);
+    ['dragging','touchZoom','doubleClickZoom'].forEach(h => full ? map[h].enable() : map[h].disable());
+    tog.innerHTML = full ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>'
+                         : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/></svg>';
+    setTimeout(() => { map.invalidateSize(); if(!full) map.setView([place.lat, place.lon], 7); }, 60);
+  };
+  tog.onclick = e => { e.stopPropagation(); setFull(!card.classList.contains('full')); };
+  $('#map').addEventListener('click', () => { if(!card.classList.contains('full')) setFull(true); });
   const dark = document.body.classList.contains('night');
   L.tileLayer(`https://{s}.basemaps.cartocdn.com/${dark?'dark':'light'}_all/{z}/{x}/{y}{r}.png`, {maxZoom:12, subdomains:'abcd'}).addTo(map);
   const wms = (layers, op) => L.tileLayer.wms('https://maps.dwd.de/geoserver/dwd/wms', {layers, format:'image/png', transparent:true, opacity:op, version:'1.3.0'});
@@ -706,21 +760,52 @@ function initMap(place){
 const DEFAULT_PLACE = {name:'München', lat:48.137, lon:11.575};
 function setPlace(p){ store.set('wx:place', p); state.place = p; load(); }
 
-async function load(){
+let loading = false;
+async function load(force){
+  if(loading) return; loading = true;
   const p = state.place;
   if(!$('#app').querySelector('.hero')) $('#app').innerHTML = '<div class="loading"><div class="spin"></div>Lade Modelle …</div>';
   try{
-    const data = await loadAll(p.lat, p.lon);
+    const data = await loadAll(p.lat, p.lon, force);
     state.fetched = Date.now();
-    state.warn = data.errs && data.errs.length ? 'Teilweise ohne Daten: ' + esc(data.errs.join(' · ')) + ' – Vorhersage läuft mit den übrigen Quellen.' : '';
-    if(!data.prev) state.warn = (state.warn? state.warn+' ':'') + 'Ohne Prüfdaten werden feste Grundgewichte genutzt.';
+    state.warn = '';
+    if(state.stale) state.warn = 'Keine Verbindung – du siehst den Stand von ' + hhmm(state.dataTime) + '. Zum Aktualisieren nach unten ziehen.';
+    else if(data.errs && data.errs.length) state.warn = 'Teilweise ohne Daten: ' + esc(data.errs.join(' · ')) + ' – Vorhersage läuft mit den übrigen Quellen.';
+    if(!data.prev && !state.stale) state.warn = (state.warn? state.warn+' ':'') + 'Ohne Prüfdaten werden feste Grundgewichte genutzt.';
     const R = build(data);
     state.res = R;
     render(p, R);
   }catch(e){
-    $('#app').innerHTML = `<div class="hero"><div class="place">${esc(p.name)}</div></div><div class="err">Daten konnten nicht geladen werden: ${esc(e.message||e)}<br>Bitte später erneut versuchen.</div>`;
-  }
+    $('#app').innerHTML = `<div class="hero"><div class="place">${esc(p.name)}</div></div><div class="err">Daten konnten nicht geladen werden: ${esc(e.message||e)}<br>Zum erneuten Versuch nach unten ziehen.</div>`;
+  }finally{ loading = false; ptrDone(); }
 }
+const hhmm = t => new Date(t).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'});
+function updatedTxt(){
+  if(!state.dataTime) return '';
+  const min = Math.round((Date.now()-state.dataTime)/60e3);
+  return (state.stale ? 'Offline · ' : '') + 'Aktualisiert ' + (min < 1 ? 'gerade eben' : min < 60 ? `vor ${min} Min.` : 'um ' + hhmm(state.dataTime));
+}
+
+/* ================= Ziehen zum Aktualisieren ================= */
+const ptr = $('#ptr'); let ptrY = null, ptrD = 0;
+window.addEventListener('touchstart', e => {
+  if(window.scrollY <= 0 && !$('#sheet').classList.contains('open') && !document.body.classList.contains('mapopen') && !e.target.closest('.hours,#map'))
+    ptrY = e.touches[0].clientY; else ptrY = null;
+}, {passive:true});
+window.addEventListener('touchmove', e => {
+  if(ptrY==null) return;
+  ptrD = Math.max(0, e.touches[0].clientY - ptrY);
+  const d = Math.min(ptrD, 110);
+  ptr.style.opacity = Math.min(1, d/70);
+  ptr.style.transform = `translateY(${d*0.6 - 40}px) rotate(${d*3}deg)`;
+}, {passive:true});
+window.addEventListener('touchend', () => {
+  if(ptrY==null) return;
+  if(ptrD > 75 && !loading){ ptr.classList.add('spin'); ptr.style.transform = 'translateY(26px)'; load(true); }
+  else ptrDone();
+  ptrY = null; ptrD = 0;
+});
+function ptrDone(){ ptr.classList.remove('spin'); ptr.style.opacity = 0; ptr.style.transform = 'translateY(-50px)'; }
 
 $('#btnSearch').onclick = () => { $('#sheet').classList.add('open'); showRecent(); setTimeout(()=>$('#q').focus(), 50); };
 $('#close').onclick = () => $('#sheet').classList.remove('open');
@@ -751,18 +836,31 @@ $('#q').oninput = () => {
 };
 $('#btnLoc').onclick = () => {
   if(!navigator.geolocation){ return; }
+  $('#btnLoc').style.opacity = .5;
   navigator.geolocation.getCurrentPosition(async pos => {
     const lat = pos.coords.latitude, lon = pos.coords.longitude;
     let name = 'Mein Standort';
-    try{ // Name über nächstgelegenen Ort ermitteln (Open-Meteo hat keine Rückwärtssuche) – bleibt generisch
+    try{ // Ortsname über BigDataCloud (kostenlos, ohne Schlüssel)
+      const r = await getJSON(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=de`);
+      name = r.city || r.locality || name;
     }catch(e){}
-    setPlace({name, lat, lon});
-  }, () => alertBox('Standort nicht verfügbar – bitte Freigabe in Safari erlauben.'), {enableHighAccuracy:false, timeout:10000, maximumAge:600000});
+    setPlace({name, lat, lon, gps:true});
+  }, () => { $('#btnLoc').style.opacity = 1; alertBox('Standort nicht verfügbar – bitte unter Einstellungen › Datenschutz › Ortungsdienste für Safari-Websites erlauben.'); }, {enableHighAccuracy:false, timeout:10000, maximumAge:600000});
 };
 function alertBox(msg){ state.warn = msg; if(state.res) render(state.place, state.res); }
 
 // Neu laden, wenn die App wieder in den Vordergrund kommt
-document.addEventListener('visibilitychange', () => { if(!document.hidden && state.fetched && Date.now()-state.fetched > CACHE_MIN*60e3) load(); });
+document.addEventListener('visibilitychange', () => {
+  if(document.hidden) return;
+  if(state.fetched && Date.now()-state.dataTime > CACHE_MIN*60e3) load();
+  else { const u = document.querySelector('.updated'); if(u) u.textContent = updatedTxt(); }
+});
+window.addEventListener('online', () => { if(state.stale) load(true); });
+
+/* ================= Offline-Fähigkeit (Service Worker) ================= */
+if('serviceWorker' in navigator && location.protocol === 'https:'){
+  navigator.serviceWorker.register('sw.js').catch(()=>{});
+}
 
 /* ================= Demo-Daten (nur #demo, zum Testen ohne Netz) ================= */
 function makeDemo(){
