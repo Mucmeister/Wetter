@@ -685,7 +685,9 @@ function nowcast(radar, offSec){
       return frames.filter(f => f.ms > start && f.ms <= end).reduce((s,f) => s + f.mm, 0); },
     // nächster Wechsel trocken/nass in der Radar-Vorhersage
     change(){ const wet = rateNow >= 0.1; const f = frames.find(f => f.ms > nowMs && ((f.mm*12 >= 0.1) !== wet));
-      return f ? {wet: !wet, at: toLocal(f.ms).slice(11,16)} : null; },
+      if(!f) return null;
+      const peak = Math.max(...frames.filter(x => x.ms >= f.ms).map(x => x.mm*12));
+      return {wet: !wet, at: toLocal(f.ms).slice(11,16), light: peak < 0.5}; },
   };
 }
 
@@ -947,7 +949,7 @@ function makeSummary(R){
   if(R.NC){
     const ch = R.NC.change();
     if(R.NC.rateNow >= 0.1) s = `Laut Radar regnet es gerade${ch ? `, voraussichtlich bis etwa ${ch.at} Uhr` : ''}`;
-    else if(ch && ch.wet) s = `Laut Radar trocken, Regen ab etwa ${ch.at} Uhr`;
+    else if(ch && ch.wet) s = `Laut Radar trocken, ${ch.light ? 'leichter Regen' : 'Regen'} ab etwa ${ch.at} Uhr`;
     else s = 'Laut Radar trocken in den nächsten 2 Stunden';
     const later = R.hourly.slice(R.nowIdx+3, R.nowIdx+12).find(h => h.pr>=0.5 && h.prcp>=0.2);
     if(R.NC.rateNow < 0.1 && !(ch && ch.wet) && later) s += `, danach Regen ab etwa ${later.t.slice(11,13)} Uhr`;
