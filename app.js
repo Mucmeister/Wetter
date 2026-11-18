@@ -32,7 +32,7 @@ const BUCKETS = [{k:'d1', off:1, from:0, to:1, label:'0–1'}, {k:'d2', off:2, f
 const bucketFor = d => BUCKETS.find(b => d >= b.from && d <= b.to);
 
 const DEMO = location.hash === '#demo';
-const BUILD = '2026-11-18.10';   // bei jeder Änderung erhöhen (gleich wie version.txt)
+const BUILD = '2026-11-18.11';   // bei jeder Änderung erhöhen (gleich wie version.txt)
 // Neue Version automatisch laden, sobald die App wieder geöffnet wird
 async function checkUpdate(){
   try{ const v = (await fetch('version.txt?' + Date.now(), {cache:'no-store'}).then(r => r.ok ? r.text() : '')).trim();
@@ -662,7 +662,9 @@ function render(place, R){
   </div>
 
   <div class="card models">
-    <h3>${svgScale()} Wie diese Vorhersage entsteht</h3>
+    <h3 id="howToggle" class="fold">${svgScale()} Wie diese Vorhersage entsteht <span class="chev">›</span></h3>
+    <div class="teaser">${teaser(R)}</div>
+    <div class="foldbody">
     <div class="explain">
       <p>Statt einem Wettermodell zu vertrauen, kombiniert diese Seite <b>${R.avail.length} Modelle</b> großer Wetterdienste, darunter drei KI-Modelle. Jedes Modell wird laufend mit echten Messwerten verglichen: Wer an diesem Ort zuletzt besser lag, bekommt mehr <b>Einfluss</b>, und typische Fehler werden herausgerechnet.</p>
     </div>
@@ -675,6 +677,7 @@ function render(place, R){
       <p><b>Regen und Spannen</b> stammen aus ${Object.values(R.members).reduce((s,m)=>s+m.P.length,0)} leicht variierten Rechenläufen (Ensembles von Google, ECMWF und DWD) plus den Einzelmodellen.${R.ST && R.ST.elev!=null ? ` Ort auf ${Math.round(R.ST.elev)} m Höhe${R.ST.hilly? '; im bergigen Gelände zählen fein aufgelöste Modelle (ICON-D2, AROME) in den ersten Tagen mehr':''}.`:''}</p>
       <p class="muted">Google WeatherNext liefert keine Archivdaten; es geht mit festem Anteil ein und erhält die durchschnittliche Ortskorrektur der anderen Modelle.</p>
     </div>
+    </div>
   </div>
 
   <div class="foot">Daten: <a href="https://open-meteo.com/">Open-Meteo</a> (CC BY 4.0) · ECMWF · DWD · NOAA · Météo-France · UK Met Office · Google DeepMind<br>
@@ -686,6 +689,7 @@ function render(place, R){
 
   document.querySelectorAll('.days .row').forEach(r => r.onclick = () => $('#det'+r.dataset.i).classList.toggle('open'));
   document.querySelectorAll('.warn').forEach(w => w.onclick = () => w.classList.toggle('open'));
+  $('#howToggle').onclick = $('.models .teaser').onclick = () => $('.models').classList.toggle('open');
   $('#star').onclick = () => { toggleFav(place); render(place, R); };
   swipeFavs();
   initMap(place);
@@ -806,6 +810,14 @@ function certainty(d){
   if(s.length > 2 && s[s.length-1].tmax - s[0].tmax >= 2)
     parts.push(`<div class="dline">Höchstwert je nach Modell ${r0(s[0].tmax)}° <span>(${s[0].m.name})</span> bis ${r0(s[s.length-1].tmax)}° <span>(${s[s.length-1].m.name})</span>.</div>`);
   return parts.length ? `<div class="dsec">Wie sicher ist das?</div>${parts.join('')}` : '';
+}
+
+// Eine Zeile, die auch eingeklappt sichtbar bleibt
+function teaser(R){
+  const T = R.ST && R.ST.track;
+  const base = `${R.avail.length} Modelle, gewichtet nach Treffsicherheit`;
+  if(T && T.ours < T.avg) return `${base} · zuletzt <b>${Math.round((1 - T.ours/T.avg)*100)} % genauer</b> als der Modell-Durchschnitt. Antippen für Details.`;
+  return `${base}. Antippen für Details.`;
 }
 
 function trackBlock(R){
