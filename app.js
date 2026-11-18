@@ -422,7 +422,9 @@ function build(data){
     const age = (Date.now() - Date.parse(CW.weather.timestamp))/60e3;
     const elev = ST && ST.elev;
     if(src.distance <= 20000 && age <= 90 && (elev == null || src.height == null || Math.abs(src.height - elev) <= 150))
-      curObs = {t: CW.weather.temperature, name: umlaut(src.station_name), dist: src.distance/1000, age};
+      { let nm = umlaut(src.station_name); const full = ST && ST.station && ST.station.name;
+        if(full && full.toLowerCase().startsWith(nm.toLowerCase().slice(0, 12))) nm = full;
+        curObs = {t: CW.weather.temperature, name: nm, dist: src.distance/1000, age}; }
   }
   if(curObs && hourly[nowIdx]) hourly[nowIdx].temp = curObs.t;
 
@@ -608,7 +610,7 @@ function render(place, R){
     const grad = `linear-gradient(90deg, ${tempColor(d.tmin)}, ${tempColor(d.tmax)})`;
     const dot = i===0 && !afterWin && c.temp!=null ? `<b style="left:calc(${clamp((c.temp-gMin)/span*100,0,100)}% - 4.5px)"></b>` : '';
     const pp = d.pprob>=0.15 ? Math.round(d.pprob*10)*10+'%' : '';
-    const night = d.range && d.range.width >= 5 ? `<div class="nightrain unsure">unsicher</div>`
+    const night = d.range && d.range.width >= 4.5 + 0.6*Math.max(0, i-2) ? `<div class="nightrain unsure">unsicher</div>`
                 : d.nightP!=null && d.nightP>=1 && d.pprob < 0.3 && d.psum < 0.5 ? `<div class="nightrain">Regen nachts</div>` : '';
     return `<div class="row" data-i="${i}"><div class="d">${dayName(d.d,i)}${night}</div>${icon(d.cond.k)}<div class="pp">${pp}</div>
       <div class="mn">${r0(d.tmin)}°</div><div class="bar"><i style="left:${l}%;width:${Math.max(w,3)}%;background:${grad}"></i>${dot}</div><div class="mx">${r0(d.tmax)}°</div></div>
@@ -820,7 +822,8 @@ function certainty(d){
 function teaser(R){
   const T = R.ST && R.ST.track;
   const base = `${R.avail.length} Modelle, gewichtet nach Treffsicherheit`;
-  if(T && T.ours < T.avg) return `${base} · zuletzt <b>${Math.round((1 - T.ours/T.avg)*100)} % genauer</b> als der Modell-Durchschnitt. Antippen für Details.`;
+  if(T && (1 - T.ours/T.avg) >= 0.05) return `${base} · zuletzt <b>${Math.round((1 - T.ours/T.avg)*100)} % genauer</b> als der Modell-Durchschnitt. Antippen für Details.`;
+  if(R.ST && R.ST.station) return `${base}, geprüft an der Messstation ${esc(R.ST.station.name)}. Antippen für Details.`;
   return `${base}. Antippen für Details.`;
 }
 
@@ -839,7 +842,7 @@ function trackBlock(R){
     const mx = Math.max(...rows.map(r => r[1]));
     html += `<div class="dsec" style="padding:0 16px">Trefferbilanz Temperatur · letzte ${T.days} Tage</div><div class="track">` +
       rows.map(r => `<div class="trow ${r[2]}"><div>${r[0]}</div><div class="tb"><i style="width:${Math.round(r[1]/mx*100)}%"></i></div><div class="r">±${fmt2(r[1])}°</div></div>`).join('') +
-      `</div><div class="explain" style="padding-top:2px">${T.ours < T.avg ? `<b>${Math.round((1 - T.ours/T.avg)*100)} % genauer</b> als der Durchschnitt aller Modelle. ` : ''}Mittlere Abweichung für den nächsten Tag, Stunde für Stunde (kürzer ist besser). Für jeden Tag wurde nur genutzt, was vorher bekannt war.</div>`;
+      `</div><div class="explain" style="padding-top:2px">${(1 - T.ours/T.avg) >= 0.05 ? `<b>${Math.round((1 - T.ours/T.avg)*100)} % genauer</b> als der Durchschnitt aller Modelle. ` : T.ours <= T.avg ? 'Hier etwa gleichauf mit dem Durchschnitt der Modelle. ' : ''}Mittlere Abweichung für den nächsten Tag, Stunde für Stunde (kürzer ist besser). Für jeden Tag wurde nur genutzt, was vorher bekannt war.</div>`;
     if(T.rain){
       const r = T.rain, bm = r.best && ALL_MODELS.find(m => m.id === r.best.id);
       const rr = [['Diese Seite', r.ours, 'us'], [`Bestes Einzelmodell (${bm ? bm.name : '–'})`, r.best ? r.best.hits : 0, ''], ['Durchschnitt aller Modelle', r.avg, '']];
