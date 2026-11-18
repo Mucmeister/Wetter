@@ -302,7 +302,19 @@ function urls(lat, lon){
   };
 }
 
+// DWD-Radar am Ort (Bright Sky): letzte 30 Min. gemessen + 2 Std. Radar-Vorhersage, 5-Minuten-Schritte
+function loadRadar(lat, lon){
+  const from = new Date(Date.now() - 35*60e3).toISOString().slice(0,16), to = new Date(Date.now() + 125*60e3).toISOString().slice(0,16);
+  return getJSON(`https://api.brightsky.dev/radar?lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}&distance=2000&format=plain&date=${from}&last_date=${to}&tz=Etc/UTC`)
+    .then(j => j && j.radar && j.radar.length ? j : null).catch(() => null);
+}
+
 async function loadAll(lat, lon, force){
+  const radarP = DEMO ? Promise.resolve(null) : loadRadar(lat, lon);
+  const d0 = await loadAll2(lat, lon, force);
+  return {...d0, radar: await radarP};
+}
+async function loadAll2(lat, lon, force){
   const key = `wx:${lat.toFixed(2)},${lon.toFixed(2)}`, skey = `wxs:${lat.toFixed(2)},${lon.toFixed(2)}`;
   const c = store.get(key);
   let S = store.get(skey);
@@ -567,6 +579,20 @@ function build(data){
     return 0.6*ensP + 0.4*det;
   }
 
+  // ===== Jetzt und die nächsten 2 Stunden: Radar statt Modell =====
+  const NC = nowcast(data.radar, off);
+  if(NC){
+    const H0 = hourly[nowIdx];
+    if(H0){ H0.prcp = NC.rateNow; H0.pr = NC.rateNow >= 0.1 ? 0.95 : NC.rateNow > 0 ? 0.5 : 0.03; H0.radar = true; }
+    for(const k of [1,2]){
+      const h = hourly[nowIdx+k]; if(!h) continue;
+      const sum = NC.sumFor(h.t); if(sum == null) continue;
+      const wR = k === 1 ? 1 : 0.5;     // nach über einer Stunde wird die Radar-Vorhersage unsicherer
+      h.prcp = wR*sum + (1-wR)*(h.prcp||0);
+      h.pr = wR*(sum >= 0.1 ? 0.9 : sum > 0.02 ? 0.45 : 0.05) + (1-wR)*(h.pr||0); h.radar = true;
+    }
+  }
+
   // Tage (Fenster 8–20 Uhr)
   const dates = [...new Set(time.map(t=>t.slice(0,10)))].slice(0, DAYS);
   const days = dates.map((d, di) => {
@@ -629,17 +655,48 @@ function build(data){
   for(const m of MODELS){ const D = dailyPer[m.id]; if(D && D.sunrise && D.sunrise[0]){ sun = {rise:D.sunrise, set:D.sunset}; break; } }
   if(!sun && fc.daily && fc.daily.sunrise) sun = {rise: fc.daily.sunrise, set: fc.daily.sunset};
 
-  return {hourly, days, cur, nowIdx, W, ST, avail, per, members, sun, now, meta:fc};
+  return {hourly, days, cur, nowIdx, W, ST, avail, per, members, sun, now, meta:fc, NC};
+}
+
+// Radar auswerten: Werte in 0,01 mm je 5 Min.; Ort = latlon_position im Raster, dazu Nachbarschaft ±1 Pixel
+function nowcast(radar, offSec){
+  if(!radar) return null;
+  const pos = radar.latlon_position, cx = Math.round(pos.x), cy = Math.round(pos.y);
+  const nowMs = Date.now();
+  const frames = radar.radar.map(f => {
+    const g = f.precipitation_5, at = (y,x) => (g[y] && g[y][x] != null) ? g[y][x] : null;
+    const c = at(cy, cx); let mx = 0;
+    for(let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++){ const v = at(cy+dy, cx+dx); if(v!=null) mx = Math.max(mx, v); }
+    return {ms: Date.parse(f.timestamp), mm: c==null ? null : c/100, near: mx/100};
+  }).filter(f => f.mm != null).sort((a,b) => a.ms - b.ms);
+  if(frames.length < 6) return null;
+  const past = frames.filter(f => f.ms <= nowMs);
+  const cur = past.length ? past[past.length-1] : frames[0];
+  // aktuelle Stärke: Mittel der letzten 15 Min., als mm/h
+  const recent = past.slice(-3);
+  const rateNow = recent.length ? mean(recent.map(f => f.mm))*12 : cur.mm*12;
+  const toLocal = ms => new Date(ms + offSec*1000).toISOString().slice(0,16);
+  const last = frames[frames.length-1].ms;
+  return {
+    frames, rateNow, nearNow: cur.near*12, last,
+    // Summe für die Stunde, die zur Ortszeit tLocal endet (wie Open-Meteo)
+    sumFor(tLocal){ const end = Date.parse(tLocal + ':00Z') - offSec*1000, start = end - 3600e3;
+      if(end > last + 60e3 || start < frames[0].ms - 5*60e3) return null;
+      return frames.filter(f => f.ms > start && f.ms <= end).reduce((s,f) => s + f.mm, 0); },
+    // nächster Wechsel trocken/nass in der Radar-Vorhersage
+    change(){ const wet = rateNow >= 0.1; const f = frames.find(f => f.ms > nowMs && ((f.mm*12 >= 0.1) !== wet));
+      return f ? {wet: !wet, at: toLocal(f.ms).slice(11,16)} : null; },
+  };
 }
 
 /* ================= Wetterzustand + Icons ================= */
 function condition({cloud, psum, pprob, thunder, fog, temp, isDay, hourly}){
   const snow = temp!=null && temp < 1;
-  const wet = hourly ? (psum >= 0.2 && pprob >= 0.35) : (pprob >= 0.5 && psum >= 1);
+  const wet = hourly ? (psum >= 0.1 && pprob >= 0.35) : (pprob >= 0.5 && psum >= 1);
   const showers = !wet && (hourly ? (psum>=0.1 && pprob>=0.25) : (pprob >= 0.3 && psum >= 0.3));
   if(thunder >= 0.3 && (pprob>=0.35)) return {k:'thunder', txt:'Gewitter'};
   if(wet) return snow ? {k:'snow', txt: psum>(hourly?1.5:8)? 'Starker Schneefall':'Schnee'}
-                      : {k:'rain', txt: psum>(hourly?2.5:10)? 'Starker Regen' : 'Regen'};
+                      : {k:'rain', txt: psum>(hourly?2.5:10)? 'Starker Regen' : (hourly && psum<0.5) ? 'Leichter Regen' : 'Regen'};
   if(showers) return snow ? {k:'snowshower', txt:'Schneeschauer möglich'} : {k:'showers', txt:'Schauer möglich'};
   if(fog >= 0.4) return {k:'fog', txt:'Nebel'};
   if(cloud == null) return {k:'partly', txt:'–'};
@@ -785,7 +842,7 @@ function render(place, R){
 
   <div class="foot">Daten: <a href="https://open-meteo.com/">Open-Meteo</a> (CC BY 4.0) · ECMWF · DWD · NOAA · Météo-France · UK Met Office · Google DeepMind<br>
   Messwerte: ${R.ST && R.ST.station && R.ST.station.by.includes('LMU') ? 'Meteorologisches Institut der LMU München (Stadtstation)' : '<a href="https://brightsky.dev/">Bright Sky</a> / Deutscher Wetterdienst'}<br>
-  Radar &amp; Warnungen: <a href="https://www.dwd.de/">Deutscher Wetterdienst</a> · Karte © OpenStreetMap, © CARTO<br>
+  Radar, Kurzfristvorhersage &amp; Warnungen: <a href="https://www.dwd.de/">Deutscher Wetterdienst</a> (über Bright Sky) · Karte © OpenStreetMap, © CARTO<br>
   Stand: ${R.meta.generated_at_local || R.now.replace('T',' ')} · Modelllauf-Abruf ${new Date(state.fetched||Date.now()).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'})}</div>`;
 
   document.querySelectorAll('.days .row').forEach(r => r.onclick = () => $('#det'+r.dataset.i).classList.toggle('open'));
@@ -887,12 +944,21 @@ function makeSummary(R){
   const rainH = rest.find(h => h.pr>=0.5 && h.prcp>=0.2);
   const dry = !rest.some(h => h.pr>=0.3 && h.prcp>=0.1);
   let s = '';
-  if(rainH && rainH.i===R.nowIdx) s = 'Es regnet gerade';
+  if(R.NC){
+    const ch = R.NC.change();
+    if(R.NC.rateNow >= 0.1) s = `Laut Radar regnet es gerade${ch ? `, voraussichtlich bis etwa ${ch.at} Uhr` : ''}`;
+    else if(ch && ch.wet) s = `Laut Radar trocken, Regen ab etwa ${ch.at} Uhr`;
+    else s = 'Laut Radar trocken in den nächsten 2 Stunden';
+    const later = R.hourly.slice(R.nowIdx+3, R.nowIdx+12).find(h => h.pr>=0.5 && h.prcp>=0.2);
+    if(R.NC.rateNow < 0.1 && !(ch && ch.wet) && later) s += `, danach Regen ab etwa ${later.t.slice(11,13)} Uhr`;
+  }
+  else if(rainH && rainH.i===R.nowIdx) s = 'Es regnet gerade';
   else if(rainH) s = `Regen wahrscheinlich ab etwa ${rainH.t.slice(11,13)} Uhr`;
   else if(dry) s = 'In den nächsten 12 Stunden trocken';
   else s = 'Vereinzelt Schauer möglich';
   const tm = R.days[1];
-  if(tm) s += `. Morgen tagsüber ${r0(tm.tmin)}–${r0(tm.tmax)}°, ${tm.cond.txt.toLowerCase()}`;
+  if(tm){ const t = tm.cond.txt, noun = /^(Regen|Schnee|Gewitter|Nebel|Starker|Leichter|Schauer|Schneeschauer)/.test(t);
+    s += `. Morgen tagsüber ${r0(tm.tmin)}–${r0(tm.tmax)}°, ${noun ? t : t.charAt(0).toLowerCase() + t.slice(1)}`; }
   const g = R.hourly.slice(R.nowIdx, R.nowIdx+24).reduce((m,h)=>Math.max(m,h.gust||0),0);
   if(g >= 60) s += `. Sturmböen bis ${r0(g)} km/h`;
   return s + '.';
