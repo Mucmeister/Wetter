@@ -264,7 +264,7 @@ const BUCKETS = [{k:'d1', off:1, from:0, to:1, label:'0–1'}, {k:'d2', off:2, f
 const bucketFor = d => BUCKETS.find(b => d >= b.from && d <= b.to);
 
 const DEMO = location.hash === '#demo';
-const BUILD = '2026-11-18.7';   // bei jeder Änderung erhöhen (gleich wie version.txt)
+const BUILD = '2026-11-18.8';   // bei jeder Änderung erhöhen (gleich wie version.txt)
 // Neue Version automatisch laden, sobald die App wieder geöffnet wird
 async function checkUpdate(){
   try{ const v = (await fetch('version.txt?' + Date.now(), {cache:'no-store'}).then(r => r.ok ? r.text() : '')).trim();
@@ -352,7 +352,7 @@ async function loadAll2(lat, lon, force){
   const key = `wx:${lat.toFixed(2)},${lon.toFixed(2)}`, skey = `wxs:${lat.toFixed(2)},${lon.toFixed(2)}`;
   const c = store.get(key);
   let S = store.get(skey);
-  const statsDue = !S || Date.now()-S.t > STATS_MIN*60e3;
+  const statsDue = !S || S.v !== BUILD || Date.now()-S.t > STATS_MIN*60e3;
   if(!force && !statsDue && c && Date.now()-c.t < CACHE_MIN*60e3){ state.dataTime = c.t; return {...c.d, stats:S}; }
   if(DEMO){ state.dataTime = Date.now(); return makeDemo(); }
   const u = urls(lat, lon);
@@ -366,7 +366,7 @@ async function loadAll2(lat, lon, force){
   const d = {fc: fc.value, ens: ens.status==='fulfilled'? ens.value : null,
              errs: [ens].filter(x=>x.status!=='fulfilled').map(x=>String(x.reason&&x.reason.message||x.reason))};
   if(statsDue){
-    try{ S = await computeAllStats(lat, lon, fc.value.utc_offset_seconds); S.t = Date.now(); store.set(skey, S); }
+    try{ S = await computeAllStats(lat, lon, fc.value.utc_offset_seconds); S.t = Date.now(); S.v = BUILD; store.set(skey, S); }
     catch(e){ if(!S) d.errs.push('Prüfdaten: ' + (e.message||e)); }
   }
   try{
@@ -956,7 +956,8 @@ function dayDetail(d, i){
 function rainChart(R){
   const NC = R.NC; if(!NC) return '';
   const now = Date.now(), fr = NC.frames.filter(f => f.ms >= now - 5*60e3 && f.ms <= now + 120*60e3);
-  if(fr.length < 6 || !fr.some(f => f.mm*12 >= 0.1)) return '';
+  const ch = NC.change();
+  if(fr.length < 6 || !(NC.rateNow >= 0.1 || (ch && ch.wet))) return '';
   const W = 300, H = 54, bw = W/fr.length;
   const hgt = mmh => mmh <= 0 ? 0 : Math.min(1, Math.log10(1 + mmh*4)/Math.log10(41)) * (H-6);   // 10 mm/h = voll
   const bars = fr.map((f,i) => { const h = hgt(f.mm*12); return h ? `<rect x="${(i*bw+1).toFixed(1)}" y="${(H-h).toFixed(1)}" width="${(bw-2).toFixed(1)}" height="${h.toFixed(1)}" rx="1.5" fill="${f.ms > now ? '#7fb8e6' : '#a9d0f0'}"/>` : ''; }).join('');
@@ -972,8 +973,15 @@ function warnBlock(R){
   const A = R.alerts && R.alerts.alerts;
   if(A){
     const now = Date.now(), rank = {extreme:4, severe:3, moderate:2, minor:1};
-    const act = A.filter(a => Date.parse(a.expires || a.onset) > now && a.status === 'actual' && a.category === 'met')
-                 .sort((a,b) => (rank[b.severity]||0) - (rank[a.severity]||0)).slice(0,3);
+    // gleiche Warnart zusammenfassen (DWD schickt oft mehrere Zeitabschnitte)
+    const by = {};
+    for(const a of A.filter(a => Date.parse(a.expires || a.onset) > now && a.status === 'actual' && a.category === 'met')){
+      const k = a.event_de, b = by[k];
+      if(!b) by[k] = {...a};
+      else { if(a.onset < b.onset) b.onset = a.onset; if(a.expires > b.expires) b.expires = a.expires;
+             if((rank[a.severity]||0) > (rank[b.severity]||0)){ b.severity = a.severity; b.description_de = a.description_de; b.instruction_de = a.instruction_de; } }
+    }
+    const act = Object.values(by).sort((a,b) => (rank[b.severity]||0) - (rank[a.severity]||0)).slice(0,3);
     return act.map(a => `<div class="warn ${a.severity}"><b>⚠︎ ${esc(cap(a.event_de))}</b><small>DWD · ${Date.parse(a.onset) > now ? 'ab ' + fmtT(a.onset) + ' ' : ''}bis ${fmtT(a.expires)} · antippen für Details</small>
       <div class="more">${esc(a.description_de || '')}${a.instruction_de ? '\n\n' + esc(a.instruction_de) : ''}</div></div>`).join('');
   }
