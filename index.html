@@ -77,6 +77,15 @@ body.snow{--bg1:#6f8299;--bg2:#b4c3d4}
 .bar i{position:absolute;top:0;bottom:0;border-radius:3px}
 .bar b{position:absolute;top:-2px;width:9px;height:9px;border-radius:50%;background:#fff;border:2px solid rgba(0,0,0,.25)}
 .nightrain{font-size:11px;font-weight:600;color:#9fd3ff;white-space:nowrap}
+.nightrain.unsure{color:#ffd27a}
+.sure{display:inline-block;padding:2px 8px;border-radius:10px;font-size:12px;font-weight:600}
+.sure.good{background:rgba(120,220,140,.25)} .sure.mid{background:rgba(255,210,90,.25)} .sure.bad{background:rgba(255,120,100,.28)}
+.track{padding:6px 16px 4px}
+.trow{display:grid;grid-template-columns:minmax(0,1fr) 120px 44px;gap:8px;align-items:center;padding:5px 0;font-size:14px}
+.trow .tb{height:8px;border-radius:4px;background:rgba(0,0,0,.18);position:relative}
+.trow .tb i{position:absolute;left:0;top:0;bottom:0;border-radius:4px;background:#9fd3ff}
+.trow.us{font-weight:700} .trow.us .tb i{background:#7ee0a0}
+.trow .r{text-align:right}
 .dsec{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.3px;color:var(--fg3);margin:14px 0 4px}
 .dline{font-size:14px;color:var(--fg);line-height:1.45}
 .dline span{color:var(--fg2)}
@@ -220,6 +229,7 @@ const median = a => { const s=a.filter(v=>v!=null&&!isNaN(v)).sort((x,y)=>x-y); 
 const mean = a => { const s=a.filter(v=>v!=null&&!isNaN(v)); return s.length? s.reduce((x,y)=>x+y,0)/s.length : null; };
 const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
 const r0 = v => v==null? '–' : Math.round(v);
+const fmt2 = v => v==null? '–' : (Math.round(v*100)/100).toLocaleString('de-DE',{minimumFractionDigits:2});
 const fmt1 = v => v==null? '–' : (Math.round(v*10)/10).toLocaleString('de-DE');
 const WD = ['So','Mo','Di','Mi','Do','Fr','Sa'];
 const dayName = (iso, i) => i===0 ? 'Heute' : WD[new Date(iso+'T12:00:00Z').getUTCDay()];
@@ -252,99 +262,193 @@ function splitByModel(block, modelIds){
 
 /* ================= Daten laden ================= */
 const HOURLY = 'temperature_2m,apparent_temperature,precipitation,weather_code,cloud_cover,wind_speed_10m,wind_gusts_10m,relative_humidity_2m,is_day';
+const STATS_MIN = 360;          // Prüfung an Messwerten: alle 6 Stunden neu
+const PAST_DAYS = 46;           // so weit zurück werden alte Vorhersagen geholt
+const WINDOW_DAYS = 30;         // Lernfenster für Korrektur und Gewichte
+const TRACK_DAYS = 14;          // Trefferbilanz: letzte 14 Tage
+const LMU = {lat:48.1481, lon:11.5733, radiusKm:12};   // Innenstadt-Station Theresienstraße
+
+const km = (a,b,c,d) => { const r=Math.PI/180, x=(d-b)*r*Math.cos((a+c)/2*r), y=(c-a)*r; return Math.sqrt(x*x+y*y)*6371; };
 
 function urls(lat, lon){
-  const base = `latitude=${lat.toFixed(3)}&longitude=${lon.toFixed(3)}&timezone=auto`;
+  const base = `latitude=${lat.toFixed(3)}&longitude=${lon.toFixed(3)}`;
   const ids = MODELS.map(m=>m.id).join(',');
-  const prevVars = [];
-  for(const v of ['temperature_2m','precipitation']){ prevVars.push(v); for(const b of BUCKETS) prevVars.push(`${v}_previous_day${b.off}`); }
+  const prevVars = ['temperature_2m','precipitation'];
+  for(const v of ['temperature_2m','precipitation']) for(const b of BUCKETS) prevVars.push(`${v}_previous_day${b.off}`);
+  // Geländeprüfung: Ort + 6 Punkte im Abstand von ~15 km
+  const ring = [[0,0]].concat([0,60,120,180,240,300].map(a => [Math.cos(a*Math.PI/180)*0.135, Math.sin(a*Math.PI/180)*0.135/Math.cos(lat*Math.PI/180)]));
   return {
-    fc:   `https://api.open-meteo.com/v1/forecast?${base}&hourly=${HOURLY}&daily=sunrise,sunset&models=${ids}&forecast_days=${DAYS}&wind_speed_unit=kmh`,
-    ens:  `https://ensemble-api.open-meteo.com/v1/ensemble?${base}&hourly=temperature_2m,precipitation&models=${ENSEMBLES.map(e=>e.id).join(',')}&forecast_days=${DAYS}`,
-    prev: `https://previous-runs-api.open-meteo.com/v1/forecast?${base}&hourly=${prevVars.join(',')}&models=${ids}&past_days=21&forecast_days=1`,
+    fc:   `https://api.open-meteo.com/v1/forecast?${base}&timezone=auto&hourly=${HOURLY}&daily=sunrise,sunset&models=${ids}&forecast_days=${DAYS}&wind_speed_unit=kmh`,
+    ens:  `https://ensemble-api.open-meteo.com/v1/ensemble?${base}&timezone=auto&hourly=temperature_2m,precipitation&models=${ENSEMBLES.map(e=>e.id).join(',')}&forecast_days=${DAYS}`,
+    prev: `https://previous-runs-api.open-meteo.com/v1/forecast?${base}&timezone=GMT&hourly=${prevVars.join(',')}&models=${ids}&past_days=${PAST_DAYS}&forecast_days=1`,
+    elev: `https://api.open-meteo.com/v1/elevation?latitude=${ring.map(p=>(lat+p[0]).toFixed(3)).join(',')}&longitude=${ring.map(p=>(lon+p[1]).toFixed(3)).join(',')}`,
   };
 }
 
 async function loadAll(lat, lon, force){
-  const key = `wx:${lat.toFixed(2)},${lon.toFixed(2)}`;
+  const key = `wx:${lat.toFixed(2)},${lon.toFixed(2)}`, skey = `wxs:${lat.toFixed(2)},${lon.toFixed(2)}`;
   const c = store.get(key);
-  if(!force && c && Date.now()-c.t < CACHE_MIN*60e3){ state.dataTime = c.t; return c.d; }
+  let S = store.get(skey);
+  const statsDue = !S || Date.now()-S.t > STATS_MIN*60e3;
+  if(!force && !statsDue && c && Date.now()-c.t < CACHE_MIN*60e3){ state.dataTime = c.t; return {...c.d, stats:S}; }
   if(DEMO){ state.dataTime = Date.now(); return makeDemo(); }
   const u = urls(lat, lon);
-  const [fc, ens, prev] = await Promise.allSettled([getJSON(u.fc), getJSON(u.ens), getJSON(u.prev)]);
+  const [fc, ens] = await Promise.allSettled([getJSON(u.fc), getJSON(u.ens)]);
   if(fc.status!=='fulfilled'){
     // Offline oder Server-Fehler: letzten Stand zeigen, falls vorhanden
-    if(c){ state.dataTime = c.t; state.stale = true; return c.d; }
+    if(c){ state.dataTime = c.t; state.stale = true; return {...c.d, stats:S}; }
     throw fc.reason;
   }
   state.dataTime = Date.now(); state.stale = false;
-  const d = {fc: fc.value, ens: ens.status==='fulfilled'? ens.value : null, prev: prev.status==='fulfilled'? prev.value : null,
-             errs: [ens, prev].filter(x=>x.status!=='fulfilled').map(x=>String(x.reason&&x.reason.message||x.reason))};
+  const d = {fc: fc.value, ens: ens.status==='fulfilled'? ens.value : null,
+             errs: [ens].filter(x=>x.status!=='fulfilled').map(x=>String(x.reason&&x.reason.message||x.reason))};
+  if(statsDue){
+    try{ S = await computeAllStats(lat, lon, fc.value.utc_offset_seconds); S.t = Date.now(); store.set(skey, S); }
+    catch(e){ if(!S) d.errs.push('Prüfdaten: ' + (e.message||e)); }
+  }
   try{
-    Object.keys(localStorage).filter(k => k.startsWith('wx:') && /\d/.test(k) && k!==key)
-      .map(k => ({k, t:(store.get(k)||{}).t||0})).sort((a,b)=>b.t-a.t).slice(2).forEach(x => localStorage.removeItem(x.k));
+    Object.keys(localStorage).filter(k => /^wxs?:\d/.test(k) && k!==key && k!==skey)
+      .map(k => ({k, t:(store.get(k)||{}).t||0})).sort((a,b)=>b.t-a.t).slice(4).forEach(x => localStorage.removeItem(x.k));
   }catch(e){}
   store.set(key, {t:Date.now(), d});
-  return d;
+  return {...d, stats:S};
 }
 
-/* ============ Trefferquote der letzten 3 Wochen → Gewichte ============ */
-// Referenz („Ist-Wetter“): Median aller Modelle aus dem jeweils jüngsten Lauf (0–24 h Vorlauf).
-// Das ist eine Analyse-Näherung, keine Stationsmessung.
-function computeSkill(prev){
-  const skill = {}; // skill[model][bucket] = {maeT, maeP, n}
-  if(!prev || !prev.hourly) return skill;
-  const H = prev.hourly, time = H.time;
-  const per = splitByModel(H, MODELS.map(m=>m.id));
-  const nowIdx = time.findIndex(t => t >= localNow(prev.utc_offset_seconds));
-  const lim = nowIdx>0 ? nowIdx : time.length;
-  // Referenz
-  const refT = [], refP = [];
-  for(let i=0;i<lim;i++){
-    refT[i] = median(MODELS.map(m => per[m.id]?.temperature_2m?.[i]));
-    refP[i] = median(MODELS.map(m => per[m.id]?.precipitation?.[i]));
+/* ============ Messwerte: Innenstadt (LMU) oder nächste DWD-Station ============ */
+async function loadObs(lat, lon, elev){
+  const dL = km(lat, lon, LMU.lat, LMU.lon);
+  if(dL <= LMU.radiusKm){
+    const j = await getJSON('data/lmu.json?v=' + Math.floor(Date.now()/9e5));
+    const s = Date.parse(j.start + ':00Z'), obs = new Map();
+    j.t.forEach((v,i) => obs.set(new Date(s + i*3600e3).toISOString().slice(0,13), {t:v, p:j.p[i]}));
+    return {name:'LMU-Stadtstation Theresienstraße', by:'Meteorologisches Institut der LMU', dist:dL, elev:j.station.elevation, obs};
   }
+  const from = new Date(Date.now() - PAST_DAYS*864e5).toISOString().slice(0,10);
+  const to = new Date().toISOString().slice(0,13) + ':00';
+  const j = await getJSON(`https://api.brightsky.dev/weather?lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}&date=${from}&last_date=${to}&tz=Etc/UTC`);
+  const src = (j.sources||[]).filter(s => s.observation_type !== 'forecast');
+  // Station: höchstens 25 km entfernt und höchstens 150 m Höhenunterschied
+  const pick = src.filter(s => s.distance <= 25000 && (elev==null || s.height==null || Math.abs(s.height - elev) <= 150))
+                  .sort((a,b) => a.distance - b.distance)[0];
+  if(!pick) return null;
+  const same = s => (pick.dwd_station_id && s.dwd_station_id === pick.dwd_station_id) || (pick.wmo_station_id && s.wmo_station_id === pick.wmo_station_id);
+  const ids = new Set(src.filter(same).map(s => s.id));
+  const obs = new Map();
+  for(const w of j.weather || []) if(ids.has(w.source_id) && w.temperature != null) obs.set(w.timestamp.slice(0,13), {t:w.temperature, p:w.precipitation});
+  if(obs.size < 24*10) return null;
+  const named = src.find(s => same(s) && s.observation_type === 'historical') || pick;   // ausgeschriebener Name statt Kürzel
+  return {name: named.station_name, by:'Deutscher Wetterdienst', dist: pick.distance/1000, elev: pick.height, obs};
+}
+
+/* ============ Fehler je Modell: systematische Abweichung + Treffsicherheit ============ */
+// Systematische Abweichung (z. B. „in der Stadt nachts 1,5° zu kalt“) getrennt nach Tageszeit (6 Blöcke à 4 h).
+const BINS = 6, binOf = h => Math.floor(h/4);
+function prepPrev(prev, obsInfo, offH){
+  const H = prev.hourly, time = H.time, per = splitByModel(H, MODELS.map(m=>m.id));
+  const n = time.length, obsT = new Array(n).fill(null), obsP = new Array(n).fill(null);
+  if(obsInfo){
+    time.forEach((t,i) => { const o = obsInfo.obs.get(t.slice(0,13)); if(o){ obsT[i] = o.t; obsP[i] = o.p; } });
+  } else { // ohne Station: Median der jüngsten Modellläufe als Ersatz-Referenz
+    for(let i=0;i<n;i++){ obsT[i] = median(MODELS.map(m => per[m.id]?.temperature_2m?.[i])); obsP[i] = median(MODELS.map(m => per[m.id]?.precipitation?.[i])); }
+  }
+  const lh = time.map(t => (+t.slice(11,13) + offH + 24) % 24);               // Ortszeit-Stunde
+  const lday = time.map(t => new Date(Date.parse(t+':00Z') + offH*3600e3).toISOString().slice(0,10));
+  const nowKey = new Date().toISOString().slice(0,13);
+  const past = time.map(t => t.slice(0,13) < nowKey);
+  return {time, per, obsT, obsP, lh, lday, past, n};
+}
+function statsWindow(D, i0, i1, withBias){
+  const S = {};
   for(const m of MODELS){
-    const P = per[m.id]; if(!P) continue;
-    skill[m.id] = {};
+    const P = D.per[m.id]; if(!P) continue;
+    S[m.id] = {};
     for(const b of BUCKETS){
-      const t = P[`temperature_2m_previous_day${b.off}`], p = P[`precipitation_previous_day${b.off}`];
-      if(!t) continue;
-      let se=0, n=0; const dayErr = {};
-      for(let i=0;i<lim;i++){
-        if(t[i]!=null && refT[i]!=null){ se += Math.abs(t[i]-refT[i]); n++; }
-        const hh = +time[i].slice(11,13), day = time[i].slice(0,10);
-        if(p && p[i]!=null && refP[i]!=null && hh>WIN_START && hh<=WIN_END){
-          (dayErr[day] ||= {f:0,r:0}); dayErr[day].f += p[i]; dayErr[day].r += refP[i];
-        }
-      }
-      const dd = Object.values(dayErr);
-      const maeP = dd.length ? dd.reduce((s,x)=>s+Math.abs(x.f-x.r),0)/dd.length : null;
-      if(n >= 48) skill[m.id][b.k] = {maeT: se/n, maeP, n, days: dd.length};
+      const F = P[`temperature_2m_previous_day${b.off}`], R = P[`precipitation_previous_day${b.off}`];
+      if(!F) continue;
+      const sum = new Array(BINS).fill(0), cnt = new Array(BINS).fill(0); let absRaw = 0, n = 0;
+      for(let i=i0;i<i1;i++){ if(!D.past[i] || F[i]==null || D.obsT[i]==null) continue;
+        const e = F[i] - D.obsT[i], k = binOf(D.lh[i]); sum[k] += e; cnt[k]++; absRaw += Math.abs(e); n++; }
+      if(n < 72) continue;
+      const bias = withBias ? sum.map((s,k) => s/(cnt[k]+12)) : new Array(BINS).fill(0);   // gedämpft gegen Ausreißer
+      let absC = 0;
+      for(let i=i0;i<i1;i++){ if(!D.past[i] || F[i]==null || D.obsT[i]==null) continue; absC += Math.abs(F[i] - bias[binOf(D.lh[i])] - D.obsT[i]); }
+      // Niederschlag: Tagessummen 8–20 Uhr
+      const days = {};
+      if(R) for(let i=i0;i<i1;i++){ const h = D.lh[i]; if(!D.past[i] || h<=WIN_START || h>WIN_END || R[i]==null || D.obsP[i]==null) continue;
+        const d = (days[D.lday[i]] ||= {f:0, o:0, n:0}); d.f += R[i]; d.o += D.obsP[i]; d.n++; }
+      const dd = Object.values(days).filter(d => d.n >= 10);
+      S[m.id][b.k] = {bias, maeRaw: absRaw/n, maeT: absC/n, maeP: dd.length >= 5 ? dd.reduce((s,d)=>s+Math.abs(d.f-d.o),0)/dd.length : null, n};
     }
   }
-  return skill;
+  return S;
 }
-
-function computeWeights(skill){
-  // W[bucket][model] = {t, p, src}
+function weightsFrom(S, hilly){
   const W = {};
   for(const b of BUCKETS){
     W[b.k] = {};
-    const mT = median(ALL_MODELS.map(m => skill[m.id]?.[b.k]?.maeT));
-    const mP = median(ALL_MODELS.map(m => skill[m.id]?.[b.k]?.maeP));
+    const mT = median(MODELS.map(m => S[m.id]?.[b.k]?.maeT)), mP = median(MODELS.map(m => S[m.id]?.[b.k]?.maeP));
+    const medBias = [...Array(BINS).keys()].map(k => median(MODELS.map(m => S[m.id]?.[b.k]?.bias[k])) || 0);
     for(const m of ALL_MODELS){
-      const s = skill[m.id]?.[b.k];
+      // Gelände: hochaufgelöste Modelle (ICON-D2, AROME) bilden Berge/Täler in den ersten Tagen besser ab
+      const prior = m.prior * (hilly && b.k !== 'd4' && b.k !== 'd6' && ['dwd_icon_seamless','meteofrance_seamless'].includes(m.id) ? 1.3 : 1);
+      const s = S[m.id]?.[b.k];
       if(s && mT){
         const fT = clamp(Math.pow(mT/Math.max(s.maeT,0.15), 2), 0.35, 2.5);
         const fP = (s.maeP!=null && mP!=null) ? clamp(Math.pow(Math.max(mP,0.3)/Math.max(s.maeP,0.3), 2), 0.35, 2.5) : 1;
-        W[b.k][m.id] = {t: m.prior*fT, p: m.prior*fP, src:'skill', maeT:s.maeT, maeP:s.maeP};
+        W[b.k][m.id] = {t: prior*fT, p: prior*fP, src:'skill', maeT:s.maeT, maeRaw:s.maeRaw, bias:s.bias};
       } else {
-        W[b.k][m.id] = {t: m.prior, p: m.prior, src:'prior'};
+        // ohne eigene Prüfdaten (WeatherNext): typische Abweichung der anderen Modelle übernehmen
+        W[b.k][m.id] = {t: prior, p: prior, src:'prior', bias: medBias};
       }
     }
   }
   return W;
+}
+
+async function computeAllStats(lat, lon, offSec){
+  const u = urls(lat, lon), offH = Math.round(offSec/3600);
+  const [prev, el] = await Promise.all([getJSON(u.prev), getJSON(u.elev).catch(() => null)]);
+  const e = el && el.elevation ? el.elevation.filter(v => v!=null) : null;
+  const elev = e && e.length ? e[0] : null;
+  const sd = e && e.length > 3 ? Math.sqrt(mean(e.map(v => (v - mean(e))**2))) : 0;
+  const hilly = sd > 100;
+  let station = null;
+  try{ station = await loadObs(lat, lon, elev); }catch(err){ station = null; }
+  const D = prepPrev(prev, station, offH);
+  const all = statsWindow(D, Math.max(0, D.n - WINDOW_DAYS*24), D.n, !!station);
+  const W = weightsFrom(all, hilly);
+  // Ortskorrektur in Worten: mittlere Abweichung der Modelle bei 1 Tag Vorlauf
+  const cityBias = station ? median(MODELS.map(m => all[m.id]?.d1 ? mean(all[m.id].d1.bias) : null)) : null;
+  const nightBias = station ? median(MODELS.map(m => all[m.id]?.d1 ? Math.min(...all[m.id].d1.bias.slice(0,2)) : null)) : null;
+  // Trefferbilanz: jeder der letzten Tage nur mit Wissen von davor (ehrlicher Rückblick)
+  let track = null;
+  if(station){
+    const dayStarts = [];
+    for(let i=1;i<D.n;i++) if(D.lh[i] === 0 && D.past[i] && i+23 < D.n && D.past[i+23]) dayStarts.push(i);
+    const use = dayStarts.slice(-TRACK_DAYS), acc = {ours:[0,0], avg:[0,0]}, per = {};
+    let days = 0;
+    for(const s0 of use){
+      if(s0 < 20*24) continue;
+      const Sw = statsWindow(D, Math.max(0, s0 - WINDOW_DAYS*24), s0, true), Ww = weightsFrom(Sw, hilly).d1;
+      let used = 0;
+      for(let i=s0;i<s0+24;i++){
+        const o = D.obsT[i]; if(o==null) continue;
+        let sw=0, sv=0, raw=[];
+        for(const m of MODELS){ const f = D.per[m.id]?.temperature_2m_previous_day1?.[i]; if(f==null) continue;
+          raw.push(f); (per[m.id] ||= [0,0]); per[m.id][0] += Math.abs(f-o); per[m.id][1]++;
+          const w = Ww[m.id]; sw += w.t; sv += w.t*(f - (w.bias? w.bias[binOf(D.lh[i])] : 0)); }
+        if(!sw || raw.length < 3) continue;
+        acc.ours[0] += Math.abs(sv/sw - o); acc.ours[1]++; acc.avg[0] += Math.abs(mean(raw) - o); acc.avg[1]++; used++;
+      }
+      if(used >= 18) days++;
+    }
+    if(days >= 5){
+      const pm = Object.entries(per).map(([id,v]) => ({id, mae:v[0]/v[1]})).sort((a,b)=>a.mae-b.mae);
+      track = {days, ours: acc.ours[0]/acc.ours[1], avg: acc.avg[0]/acc.avg[1], best: pm[0], models: pm};
+    }
+  }
+  return {W, track, cityBias, nightBias, elev, hilly,
+          station: station ? {name:station.name, by:station.by, dist:station.dist, elev:station.elev} : null};
 }
 
 /* ================= Konsens bilden ================= */
@@ -379,12 +483,23 @@ function build(data){
     };
   }
 
-  const skill = computeSkill(data.prev);
-  const W = computeWeights(skill);
+  const ST = data.stats || null;
+  const W = ST && ST.W ? ST.W : weightsFrom({}, false);
   const avail = ALL_MODELS.filter(m => per[m.id] && per[m.id].temperature_2m && per[m.id].temperature_2m.some(v=>v!=null));
 
   const nowIdx = Math.max(0, time.findIndex(t => t >= now));
   const leadDay = i => Math.max(0, Math.floor((i - nowIdx)/24));
+
+  // Ortskorrektur: systematische Abweichung je Modell, Vorlaufzeit und Tageszeit abziehen
+  const raw = {};
+  for(const m of avail){
+    raw[m.id] = per[m.id].temperature_2m.slice();
+    for(const v of ['temperature_2m','apparent_temperature']){
+      const A = per[m.id][v]; if(!A) continue;
+      per[m.id][v] = A.map((x,i) => { if(x==null) return null; const w = W[bucketFor(leadDay(i)).k][m.id];
+        return w && w.bias ? x - w.bias[binOf(+time[i].slice(11,13))] : x; });
+    }
+  }
 
   function blend(varName, i, kind){
     const b = bucketFor(leadDay(i)).k;
@@ -472,8 +587,23 @@ function build(data){
     byModel.forEach(x => x.share = x.w.t/wsum);
     const sd = Math.sqrt(mean(byModel.map(x => (x.tmax - tmax)**2)) || 0);
     const minT = Math.min(...win.map(h=>h.temp));
+    // Spanne aus den Ensembles (10–90 %), auf den Konsens zentriert
+    let range = null;
+    const j0 = ensTimeIdx[time[iS]], j1 = ensTimeIdx[time[iE]];
+    if(j0!=null && j1!=null){
+      const hi=[], lo=[];
+      for(const M of Object.values(members)) for(const a of M.T){ let mx=-99, mn=99, ok=0;
+        for(let j=j0;j<=j1;j++) if(a[j]!=null){ mx=Math.max(mx,a[j]); mn=Math.min(mn,a[j]); ok++; }
+        if(ok>=6){ hi.push(mx); lo.push(mn); } }
+      if(hi.length >= 20){
+        const q = (arr,p) => { const s=arr.slice().sort((x,y)=>x-y); return s[Math.min(s.length-1, Math.max(0, Math.round(p*(s.length-1))))]; };
+        const sh = tmax - q(hi,.5), sl = tmin - q(lo,.5);
+        range = {hi:[q(hi,.1)+sh, q(hi,.9)+sh], lo:[q(lo,.1)+sl, q(lo,.9)+sl], n: hi.length};
+        range.width = range.hi[1] - range.hi[0];
+      }
+    }
     const cond = condition({cloud, psum, pprob, thunder, fog, temp: (tmax+tmin)/2, isDay:1});
-    return {d, di, tmax, tmin, psum, pprob, cloud, thunder, nightP, fullDay, byModel, sd, cond, minT, bucket:b};
+    return {d, di, tmax, tmin, psum, pprob, cloud, thunder, nightP, fullDay, byModel, sd, cond, minT, bucket:b, range};
   }).filter(Boolean);
 
   const cur = hourly[nowIdx];
@@ -482,7 +612,7 @@ function build(data){
   for(const m of MODELS){ const D = dailyPer[m.id]; if(D && D.sunrise && D.sunrise[0]){ sun = {rise:D.sunrise, set:D.sunset}; break; } }
   if(!sun && fc.daily && fc.daily.sunrise) sun = {rise: fc.daily.sunrise, set: fc.daily.sunset};
 
-  return {hourly, days, cur, nowIdx, W, skill, avail, per, members, sun, now, meta:fc};
+  return {hourly, days, cur, nowIdx, W, ST, avail, per, members, sun, now, meta:fc};
 }
 
 /* ================= Wetterzustand + Icons ================= */
@@ -567,7 +697,8 @@ function render(place, R){
     const grad = `linear-gradient(90deg, ${tempColor(d.tmin)}, ${tempColor(d.tmax)})`;
     const dot = i===0 && !afterWin && c.temp!=null ? `<b style="left:calc(${clamp((c.temp-gMin)/span*100,0,100)}% - 4.5px)"></b>` : '';
     const pp = d.pprob>=0.15 ? Math.round(d.pprob*10)*10+'%' : '';
-    const night = d.nightP!=null && d.nightP>=1 ? `<div class="nightrain">Regen nachts</div>` : '';
+    const night = d.range && d.range.width >= 5 ? `<div class="nightrain unsure">unsicher</div>`
+                : d.nightP!=null && d.nightP>=1 ? `<div class="nightrain">Regen nachts</div>` : '';
     return `<div class="row" data-i="${i}"><div class="d">${dayName(d.d,i)}${night}</div>${icon(d.cond.k)}<div class="pp">${pp}</div>
       <div class="mn">${r0(d.tmin)}°</div><div class="bar"><i style="left:${l}%;width:${Math.max(w,3)}%;background:${grad}"></i>${dot}</div><div class="mx">${r0(d.tmax)}°</div></div>
       <div class="detail" id="det${i}">${dayDetail(d, i)}</div>`;
@@ -622,19 +753,21 @@ function render(place, R){
   <div class="card models">
     <h3>${svgScale()} Wie diese Vorhersage entsteht</h3>
     <div class="explain">
-      <p>Statt einem Wettermodell zu vertrauen, kombiniert diese Seite <b>${R.avail.length} Modelle</b> großer Wetterdienste, darunter drei KI-Modelle. Wer an diesem Ort zuletzt besser lag, bekommt mehr <b>Einfluss</b>.</p>
+      <p>Statt einem Wettermodell zu vertrauen, kombiniert diese Seite <b>${R.avail.length} Modelle</b> großer Wetterdienste, darunter drei KI-Modelle. Jedes Modell wird laufend mit echten Messwerten verglichen: Wer an diesem Ort zuletzt besser lag, bekommt mehr <b>Einfluss</b>, und typische Fehler werden herausgerechnet.</p>
     </div>
+    ${trackBlock(R)}
     ${modelTable(R)}
     <div class="explain">
-      <p><b>Treffergenauigkeit:</b> So weit lag das Modell hier in den letzten 3 Wochen bei der Temperatur für den nächsten Tag im Schnitt daneben. Kleiner ist besser.</p>
-      <p><b>Einfluss:</b> Anteil des Modells an der Vorhersage. Für die nächsten Tage und für später wird getrennt gerechnet, weil manche Modelle kurzfristig, andere langfristig stärker sind.</p>
-      <p><b>Tageswerte</b> gelten für 8–20 Uhr, damit nächtlicher Regen keinen sonnigen Tag verdirbt. Tippe auf einen Tag für den ganzen Tag und alle Modelle.</p>
-      <p><b>Regenwahrscheinlichkeit:</b> Aus ${Object.values(R.members).reduce((s,m)=>s+m.P.length,0)} leicht variierten Rechenläufen (Ensembles von Google, ECMWF und DWD) plus den Einzelmodellen.</p>
-      <p class="muted">Vergleichsbasis sind die jüngsten Modellläufe, keine Stationsmessungen. Google WeatherNext liefert keine Archivdaten und geht mit festem Anteil ein.</p>
+      <p><b>Treffergenauigkeit:</b> So weit lag das Modell hier in den letzten 4 Wochen bei der Temperatur für den nächsten Tag im Schnitt daneben, nach der Ortskorrektur. Kleiner ist besser.</p>
+      <p><b>Einfluss:</b> Anteil des Modells an der Vorhersage, getrennt für die nächsten Tage und für später.</p>
+      <p><b>Tageswerte</b> gelten für 8–20 Uhr, damit nächtlicher Regen keinen sonnigen Tag verdirbt. Tippe auf einen Tag für den ganzen Tag, die Unsicherheit und alle Modelle.</p>
+      <p><b>Regen und Spannen</b> stammen aus ${Object.values(R.members).reduce((s,m)=>s+m.P.length,0)} leicht variierten Rechenläufen (Ensembles von Google, ECMWF und DWD) plus den Einzelmodellen.${R.ST && R.ST.elev!=null ? ` Ort auf ${Math.round(R.ST.elev)} m Höhe${R.ST.hilly? '; im bergigen Gelände zählen fein aufgelöste Modelle (ICON-D2, AROME) in den ersten Tagen mehr':''}.`:''}</p>
+      <p class="muted">Google WeatherNext liefert keine Archivdaten; es geht mit festem Anteil ein und erhält die durchschnittliche Ortskorrektur der anderen Modelle.</p>
     </div>
   </div>
 
   <div class="foot">Daten: <a href="https://open-meteo.com/">Open-Meteo</a> (CC BY 4.0) · ECMWF · DWD · NOAA · Météo-France · UK Met Office · Google DeepMind<br>
+  Messwerte: ${R.ST && R.ST.station && R.ST.station.by.includes('LMU') ? 'Meteorologisches Institut der LMU München (Stadtstation)' : '<a href="https://brightsky.dev/">Bright Sky</a> / Deutscher Wetterdienst'}<br>
   Radar &amp; Warnungen: <a href="https://www.dwd.de/">Deutscher Wetterdienst</a> · Karte © OpenStreetMap, © CARTO<br>
   Stand: ${R.meta.generated_at_local || R.now.replace('T',' ')} · Modelllauf-Abruf ${new Date(state.fetched||Date.now()).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'})}</div>`;
 
@@ -664,12 +797,54 @@ function dayDetail(d, i){
     <div class="hours">${hrs}</div>
     <div class="dline">${r0(F.tmin)}° bis ${r0(F.tmax)}° <span>· 8–20 Uhr: ${r0(d.tmin)}° bis ${r0(d.tmax)}°</span></div>
     <div class="dline">Regen <span style="white-space:nowrap">0–8 Uhr:</span> ${mm(F.pEarly)} · <span style="white-space:nowrap">8–20 Uhr:</span> ${mm(d.psum)} · <span style="white-space:nowrap">20–24 Uhr:</span> ${mm(F.pLate)}</div>
+    ${certainty(d)}
     <div class="dsec">Was die einzelnen Modelle sagen (8–20 Uhr)</div>
     <div class="hint">Jede Zeile ist ein eigenes Wettermodell. <b>Einfluss</b> zeigt, wie stark es in die Vorhersage oben eingeht: Modelle, die hier zuletzt genauer lagen, zählen mehr.</div>
     <span class="agree ${ag[0]}">${ag[1]} (±${fmt1(d.sd)}°)</span>
     <div class="mrow head" style="margin-top:8px"><div>Modell</div><div class="r">Tief</div><div></div><div>Hoch</div><div class="r">Regen</div><div class="r">Einfluss</div></div>
     ${rows}
     <div class="mrow cons"><div class="n">Vorhersage gesamt</div><div class="r">${r0(d.tmin)}°</div>${bar(d.tmin,d.tmax)}<div>${r0(d.tmax)}°</div><div class="r">${fmt1(d.psum)}</div><div class="r">100%</div></div>`;
+}
+
+function certainty(d){
+  const parts = [];
+  if(d.range){
+    const w = d.range.width;
+    const cls = w < 3 ? ['good','ziemlich sicher'] : w < 5 ? ['mid','etwas unsicher'] : ['bad','unsicher'];
+    parts.push(`<div class="dline" style="margin-bottom:4px"><span class="sure ${cls[0]}">Temperatur ${cls[1]}</span></div>`);
+    parts.push(`<div class="dline">Höchstwert wahrscheinlich ${r0(d.range.hi[0])}° bis ${r0(d.range.hi[1])}°, Tiefstwert ${r0(d.range.lo[0])}° bis ${r0(d.range.lo[1])}° <span>(8–20 Uhr)</span></div>`);
+  }
+  const wet = d.byModel.filter(x => x.psum != null && x.psum >= 1), dry = d.byModel.filter(x => x.psum != null && x.psum < 0.2);
+  const names = a => a.map(x => x.m.name).join(', ');
+  let rain = '';
+  if(wet.length && dry.length) rain = `Uneinig beim Regen: ${wet.length} von ${d.byModel.length} Modellen erwarten Regen (${names(wet)}), ${dry.length} bleiben trocken.`;
+  else if(wet.length === d.byModel.length) rain = 'Alle Modelle erwarten Regen.';
+  else if(dry.length === d.byModel.length) rain = 'Alle Modelle bleiben trocken.';
+  if(rain) parts.push(`<div class="dline">${rain}</div>`);
+  const s = d.byModel.slice().sort((a,b)=>a.tmax-b.tmax);
+  if(s.length > 2 && s[s.length-1].tmax - s[0].tmax >= 2)
+    parts.push(`<div class="dline">Höchstwert je nach Modell ${r0(s[0].tmax)}° <span>(${s[0].m.name})</span> bis ${r0(s[s.length-1].tmax)}° <span>(${s[s.length-1].m.name})</span>.</div>`);
+  return parts.length ? `<div class="dsec">Wie sicher ist das?</div>${parts.join('')}` : '';
+}
+
+function trackBlock(R){
+  const S = R.ST;
+  if(!S || !S.station) return `<div class="explain"><p>Für diesen Ort gibt es keine Messstation in der Nähe (höchstens 25 km, ähnliche Höhe). Die Modelle werden deshalb untereinander verglichen statt an echten Messwerten.</p></div>`;
+  const st = S.station, T = S.track;
+  const where = `<b>${esc(st.name)}</b> (${st.by}, ${fmt1(st.dist)} km entfernt${st.elev!=null? ', '+Math.round(st.elev)+' m':''})`;
+  let html = `<div class="explain"><p>Geprüft an echten Messwerten: ${where}.</p>`;
+  if(S.cityBias != null && Math.abs(S.cityBias) >= 0.3)
+    html += `<p><b>Ortskorrektur:</b> Die Modelle lagen hier zuletzt im Schnitt ${fmt1(Math.abs(S.cityBias))}° zu ${S.cityBias<0?'kalt':'warm'}${S.nightBias!=null && S.cityBias<0 && S.nightBias < S.cityBias-0.3 ? `, nachts bis ${fmt1(Math.abs(S.nightBias))}°` : ''}. Das wird ausgeglichen, getrennt nach Tageszeit.</p>`;
+  html += `</div>`;
+  if(T){
+    const best = ALL_MODELS.find(m => m.id === T.best.id);
+    const rows = [['Diese Seite', T.ours, 'us'], [`Bestes Einzelmodell (${best ? best.name : T.best.id})`, T.best.mae, ''], ['Durchschnitt aller Modelle', T.avg, '']];
+    const mx = Math.max(...rows.map(r => r[1]));
+    html += `<div class="dsec" style="padding:0 16px">Trefferbilanz · letzte ${T.days} Tage</div><div class="track">` +
+      rows.map(r => `<div class="trow ${r[2]}"><div>${r[0]}</div><div class="tb"><i style="width:${Math.round(r[1]/mx*100)}%"></i></div><div class="r">±${fmt2(r[1])}°</div></div>`).join('') +
+      `</div><div class="explain" style="padding-top:2px">${T.ours < T.avg ? `<b>${Math.round((1 - T.ours/T.avg)*100)} % genauer</b> als der Durchschnitt aller Modelle. ` : ''}Gezeigt ist die mittlere Abweichung der Temperatur für den nächsten Tag, Stunde für Stunde (kürzer ist besser). Für jeden Tag wurde nur genutzt, was vorher bekannt war.</div>`;
+  }
+  return html;
 }
 
 function modelTable(R){
@@ -679,7 +854,7 @@ function modelTable(R){
   const cell = (bk, m) => { const v = share(bk, m.id); return `<div class="infl"><i style="width:${Math.round(v/mx*30)}px"></i>${Math.round(v*100)}%</div>`; };
   const G = 'style="grid-template-columns:minmax(0,1fr) 62px 62px 62px"';
   const rows = list.map(m => {
-    const err = R.skill[m.id]?.d1?.maeT;
+    const err = R.W.d1[m.id]?.src === 'skill' ? R.W.d1[m.id].maeT : null;
     return `<div class="mrow" ${G}>
       <div class="n">${m.name}${m.ki?'<span class="tag ki">KI</span>':''}</div>
       <div class="r">${err!=null? '±'+fmt1(err)+'°' : '<span class="muted">keine Daten</span>'}</div>
@@ -771,7 +946,6 @@ async function load(force){
     state.warn = '';
     if(state.stale) state.warn = 'Keine Verbindung – du siehst den Stand von ' + hhmm(state.dataTime) + '. Zum Aktualisieren nach unten ziehen.';
     else if(data.errs && data.errs.length) state.warn = 'Teilweise ohne Daten: ' + esc(data.errs.join(' · ')) + ' – Vorhersage läuft mit den übrigen Quellen.';
-    if(!data.prev && !state.stale) state.warn = (state.warn? state.warn+' ':'') + 'Ohne Prüfdaten werden feste Grundgewichte genutzt.';
     const R = build(data);
     state.res = R;
     render(p, R);
