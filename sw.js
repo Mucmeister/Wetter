@@ -1,8 +1,9 @@
 // Service Worker: lässt die Wetter-App sofort starten und offline den letzten Stand zeigen.
 // Seite selbst: erst Netz (damit Updates sofort ankommen), sonst Cache.
 // Bibliotheken & Icons: aus dem Cache. Wetterdaten: nie hier (die App speichert sie selbst).
-const CACHE = 'wetter-v5';
-const SHELL = ['./', 'index.html', 'manifest.json', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
+const CACHE = 'wetter-v6';
+const SHELL = ['./', 'index.html', 'app.js', 'manifest.json', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png',
+  'vendor/leaflet/leaflet.js', 'vendor/leaflet/leaflet.css', 'vendor/fonts/fonts.css'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -22,6 +23,11 @@ self.addEventListener('fetch', e => {
       .catch(() => caches.match('index.html')));
     return;
   }
+  if(sameOrigin && url.pathname.endsWith('app.js')){
+    e.respondWith(fetch(req).then(r => { const c = r.clone(); caches.open(CACHE).then(x => x.put(req, c)); return r; })
+      .catch(() => caches.match(req, {ignoreSearch:true})));
+    return;
+  }
   // Messwerte (data/…): immer frisch aus dem Netz, offline aus dem Cache
   if(sameOrigin && url.pathname.endsWith('version.txt')) return;   // immer direkt aus dem Netz
   if(sameOrigin && url.pathname.includes('/data/')){
@@ -30,7 +36,7 @@ self.addEventListener('fetch', e => {
     return;
   }
   // Eigene Dateien und Leaflet-Bibliothek: Cache zuerst
-  if(sameOrigin || ['cdnjs.cloudflare.com','fonts.googleapis.com','fonts.gstatic.com'].includes(url.hostname)){
+  if(sameOrigin && !url.pathname.endsWith('app.js')){
     e.respondWith(caches.match(req).then(hit => hit || fetch(req).then(r => {
       if(r.ok || r.type === 'opaque'){ const c = r.clone(); caches.open(CACHE).then(x => x.put(req, c)); }
       return r;
