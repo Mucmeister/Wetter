@@ -1,0 +1,25 @@
+name: Messwerte LMU-Stadtstation
+on:
+  schedule:
+    - cron: '23 */3 * * *'   # alle 3 Stunden
+  workflow_dispatch:          # manuell über "Actions" startbar
+  push:
+    paths: ['tools/**', '.github/workflows/messwerte.yml']
+permissions:
+  contents: write
+concurrency: messwerte
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: 20}
+      - run: node tools/update-lmu.js
+      - name: Änderungen speichern
+        run: |
+          git config user.name "wetter-bot"
+          git config user.email "wetter-bot@users.noreply.github.com"
+          git add data/lmu.json
+          git diff --cached --quiet || (git commit -m "Messwerte aktualisiert" && git pull --rebase && git push)
