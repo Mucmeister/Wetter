@@ -1,7 +1,7 @@
 // Service Worker: lässt die Wetter-App sofort starten und offline den letzten Stand zeigen.
 // Seite selbst: erst Netz (damit Updates sofort ankommen), sonst Cache.
 // Bibliotheken & Icons: aus dem Cache. Wetterdaten: nie hier (die App speichert sie selbst).
-const CACHE = 'wetter-v6';
+const CACHE = 'wetter-v7';
 const SHELL = ['./', 'index.html', 'app.js', 'manifest.json', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png',
   'vendor/leaflet/leaflet.js', 'vendor/leaflet/leaflet.css', 'vendor/fonts/fonts.css'];
 
@@ -19,12 +19,12 @@ self.addEventListener('fetch', e => {
   const sameOrigin = url.origin === location.origin;
   // Seite: Netz zuerst
   if(req.mode === 'navigate' || (sameOrigin && url.pathname.endsWith('.html'))){
-    e.respondWith(fetch(req).then(r => { const c = r.clone(); caches.open(CACHE).then(x => x.put('index.html', c)); return r; })
+    e.respondWith(fetch(req, {cache:'no-cache'}).then(r => { const c = r.clone(); caches.open(CACHE).then(x => x.put('index.html', c)); return r; })
       .catch(() => caches.match('index.html')));
     return;
   }
   if(sameOrigin && url.pathname.endsWith('app.js')){
-    e.respondWith(fetch(req).then(r => { const c = r.clone(); caches.open(CACHE).then(x => x.put(req, c)); return r; })
+    e.respondWith(fetch(req, {cache:'no-cache'}).then(r => { const c = r.clone(); caches.open(CACHE).then(x => x.put(req, c)); return r; })
       .catch(() => caches.match(req, {ignoreSearch:true})));
     return;
   }
