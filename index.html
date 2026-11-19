@@ -171,7 +171,8 @@ body.mapopen{overflow:hidden}
 .err{background:rgba(255,90,80,.25);padding:12px 16px;border-radius:12px;font-size:14px;margin-bottom:12px}
 .leaflet-container{font-family:inherit}
 /* ===== Gestaltung „Tinte & Messing“: ruhiger Hintergrund, Messing-Akzent, größere Schrift ===== */
-body{font-family:"Inter",-apple-system,sans-serif;font-feature-settings:"tnum" 1,"cv11" 1}
+/* Text in der Systemschrift (iPhone: SF Pro) – am besten lesbar, kein Download; Fraunces nur für Ort und große Zahlen */
+body{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI","Inter",sans-serif;font-feature-settings:"tnum" 1}
 
 :root,body,body.night,body.overcast,body.rain,body.snow,body.night.rain,body.night.overcast{--bg1:#0d1a28;--bg2:#163044}
 body{--fg:#f3eee4;--fg2:rgba(243,238,228,.72);--fg3:rgba(243,238,228,.5);--card:rgba(255,255,255,.055);--line:rgba(243,238,228,.10)}
