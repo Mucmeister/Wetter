@@ -1,0 +1,27 @@
+name: Aktueller Messwert LMU
+on:
+  schedule:
+    - cron: '*/10 * * * *'   # alle 10 Minuten (GitHub startet oft etwas verzögert)
+  workflow_dispatch:
+  push:
+    paths: ['tools/lmu-now.js', '.github/workflows/jetzt.yml']
+permissions:
+  contents: write
+concurrency: jetzt
+jobs:
+  now:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: 20}
+      - run: node tools/lmu-now.js
+      - name: In Zweig "live" ablegen (nur eine Version, keine wachsende Historie)
+        run: |
+          mkdir /tmp/live && cp now.json /tmp/live/ && cd /tmp/live
+          git init -q -b live
+          git config user.name "wetter-bot"
+          git config user.email "wetter-bot@users.noreply.github.com"
+          git add now.json && git commit -qm "Aktueller Messwert"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" live

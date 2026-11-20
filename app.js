@@ -113,12 +113,15 @@ function loadRadar(lat, lon){
 }
 
 async function loadAll(lat, lon, force){
+  const nearLMU = km(lat, lon, LMU.lat, LMU.lon) <= LMU.radiusKm;
+  const lmuNow = (DEMO || !nearLMU) ? Promise.resolve(null)
+    : getJSON('https://raw.githubusercontent.com/Mucmeister/wetter/live/now.json?t=' + Math.floor(Date.now()/6e4)).catch(() => null);
   const live = DEMO ? [null,null,null] : [loadRadar(lat, lon),
     getJSON(`https://api.brightsky.dev/alerts?lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}`).catch(() => null),
     getJSON(`https://api.brightsky.dev/current_weather?lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}&max_dist=20000`).catch(() => null)];
   const d0 = await loadAll2(lat, lon, force);
   const [radar, alerts, current] = await Promise.all(live);
-  return {...d0, radar, alerts, current};
+  return {...d0, radar, alerts, current, lmuNow: await lmuNow};
 }
 async function loadAll2(lat, lon, force){
   const key = `wx:${lat.toFixed(2)},${lon.toFixed(2)}`, skey = `wxs:${lat.toFixed(2)},${lon.toFixed(2)}`;
@@ -428,6 +431,13 @@ function build(data){
         const from = P.exact || null;
         const dist = (from && src.lat != null) ? km(from.lat, from.lon, src.lat, src.lon) : src.distance/1000;
         curObs = {t: CW.weather.temperature, name: nm, dist, age, fromYou: !!from}; }
+  }
+  // In der Innenstadt hat die LMU-Station Vorrang (max. 60 Min. alt)
+  const LN = data.lmuNow;
+  if(LN && LN.t != null && (Date.now() - Date.parse(LN.time))/60e3 <= 60){
+    const P = state.place || {}, from = P.exact || null;
+    curObs = {t: LN.t, name: 'LMU-Station Theresienstraße', dist: km(from ? from.lat : P.lat, from ? from.lon : P.lon, LN.lat, LN.lon),
+              age: (Date.now() - Date.parse(LN.time))/60e3, fromYou: !!from};
   }
   if(curObs && hourly[nowIdx]) hourly[nowIdx].temp = curObs.t;
 
