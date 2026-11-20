@@ -5,9 +5,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: |
-          mkdir out && cd out
+          set +e; mkdir out && cd out
           W='https://maps.dwd.de/geoserver/dwd/wms'
-          curl -s "$W?service=WMS&version=1.3.0&request=GetCapabilities" -o cap.xml
+          curl -s -m 60 "$W?service=WMS&version=1.3.0&request=GetCapabilities" -o cap.xml
           python3 - <<'PY'
           import re
           s=open('cap.xml').read()
@@ -33,7 +33,7 @@ jobs:
           curl -s "https://opendata.dwd.de/weather/radar/composite/" > od_composite.html
           curl -s "https://opendata.dwd.de/weather/radar/composite/hymecng/" > od_hymec.html
           F=$(grep -o 'href="[^"]*LATEST[^"]*"' od_hymec.html | head -1 | cut -d'"' -f2); echo "latest=$F" > hymec.txt
-          [ -n "$F" ] && curl -s -o hymec_latest "https://opendata.dwd.de/weather/radar/composite/hymecng/$F" && ls -la hymec_latest >> hymec.txt
+          curl -s -m 60 -s -o hymec_latest "https://opendata.dwd.de/weather/radar/composite/hymecng/$F" && ls -la hymec_latest >> hymec.txt
           curl -sI "https://opendata.dwd.de/weather/radar/composite/hymecng/" -H 'Origin: https://mucmeister.github.io' > cors_od.txt
           curl -s -o bs_full.json -w "brightsky full %{http_code} %{size_download} %{time_total}\n" "https://api.brightsky.dev/radar?format=compressed" >> getmap.txt
           curl -sI "https://api.brightsky.dev/radar?format=compressed" -H 'Origin: https://mucmeister.github.io' > cors_bs.txt
