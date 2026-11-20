@@ -424,7 +424,10 @@ function build(data){
     if(src.distance <= 20000 && age <= 90 && (elev == null || src.height == null || Math.abs(src.height - elev) <= 150))
       { let nm = umlaut(src.station_name); const full = ST && ST.station && ST.station.name;
         if(full && full.toLowerCase().startsWith(nm.toLowerCase().slice(0, 12))) nm = full;
-        curObs = {t: CW.weather.temperature, name: nm, dist: src.distance/1000, age}; }
+        const P = state.place || {};
+        const from = P.exact || null;
+        const dist = (from && src.lat != null) ? km(from.lat, from.lon, src.lat, src.lon) : src.distance/1000;
+        curObs = {t: CW.weather.temperature, name: nm, dist, age, fromYou: !!from}; }
   }
   if(curObs && hourly[nowIdx]) hourly[nowIdx].temp = curObs.t;
 
@@ -628,7 +631,7 @@ function render(place, R){
     <div class="place-row"><div class="place">${esc(place.name)}</div><button class="star ${isFav(place)?'on':''}" id="star" aria-label="Favorit">${isFav(place)?'★':'☆'}</button></div>
     ${favDots(place)}
     <div class="temp">${r0(c.temp)}°</div>
-    ${R.curObs ? `<div class="measured">gemessen in ${esc(R.curObs.name)}${R.curObs.dist >= 1 ? ` (${fmt1(R.curObs.dist)} km)` : ''}</div>` : ''}
+    ${R.curObs ? `<div class="measured">gemessen in ${esc(R.curObs.name)}${R.curObs.dist >= 1 ? ` (${fmt1(R.curObs.dist)} km ${R.curObs.fromYou ? 'von dir' : 'vom Ortszentrum'})` : ''}</div>` : ''}
     <div class="cond">${hc.txt}</div>
     <div class="hl">H: ${r0(hlDay.tmax)}°  T: ${r0(hlDay.tmin)}°</div>
     <div class="sub">${hlLabel} · Konsens aus ${R.avail.length} Modellen</div>
@@ -1035,14 +1038,15 @@ $('#btnLoc').onclick = () => {
   if(!navigator.geolocation){ return; }
   $('#btnLoc').style.opacity = .5;
   navigator.geolocation.getCurrentPosition(async pos => {
-    const lat = Math.round(pos.coords.latitude*100)/100, lon = Math.round(pos.coords.longitude*100)/100;
+    const exact = {lat: pos.coords.latitude, lon: pos.coords.longitude};   // bleibt auf dem Gerät, nur für die Entfernungsanzeige
+    const lat = Math.round(exact.lat*100)/100, lon = Math.round(exact.lon*100)/100;
     let name = 'Mein Standort';
     try{ // Ortsname über BigDataCloud (kostenlos, ohne Schlüssel)
       const r = await getJSON(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=de`);
       name = r.city || r.locality || name;
     }catch(e){}
-    setPlace({name, lat, lon, gps:true});
-  }, () => { $('#btnLoc').style.opacity = 1; alertBox('Standort nicht verfügbar – bitte unter Einstellungen › Datenschutz › Ortungsdienste für Safari-Websites erlauben.'); }, {enableHighAccuracy:false, timeout:10000, maximumAge:600000});
+    setPlace({name, lat, lon, gps:true, exact});
+  }, () => { $('#btnLoc').style.opacity = 1; alertBox('Standort nicht verfügbar – bitte unter Einstellungen › Datenschutz › Ortungsdienste für Safari-Websites erlauben.'); }, {enableHighAccuracy:true, timeout:15000, maximumAge:60000});
 };
 function alertBox(msg){ state.warn = msg; if(state.res) render(state.place, state.res); }
 
