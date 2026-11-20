@@ -641,7 +641,7 @@ function render(place, R){
     <div class="place-row"><div class="place">${esc(place.name)}</div><button class="star ${isFav(place)?'on':''}" id="star" aria-label="Favorit">${isFav(place)?'★':'☆'}</button></div>
     ${favDots(place)}
     <div class="temp">${r0(c.temp)}°</div>
-    ${R.curObs ? `<div class="measured">gemessen in ${esc(R.curObs.name)}${R.curObs.dist >= 1 ? ` (${fmt1(R.curObs.dist)} km ${R.curObs.fromYou ? 'von dir' : 'vom Ortszentrum'})` : ''}</div>` : ''}
+    ${R.curObs ? `<div class="measured">${R.curObs.t.toLocaleString("de-DE",{minimumFractionDigits:1,maximumFractionDigits:1})}° gemessen an ${R.curObs.name.startsWith('LMU') ? 'der ' : 'der Station '}${esc(R.curObs.name)}${R.curObs.dist >= 1 ? ` (${fmt1(R.curObs.dist)} km ${R.curObs.fromYou ? 'von dir' : 'vom Ortszentrum'})` : ''}, ${R.curObs.age < 2 ? 'gerade eben' : `vor ${Math.round(R.curObs.age)} Min.`}</div>` : ''}
     <div class="cond">${hc.txt}</div>
     <div class="hl">H: ${r0(hlDay.tmax)}°  T: ${r0(hlDay.tmin)}°</div>
     <div class="sub">${hlLabel} · Konsens aus ${R.avail.length} Modellen</div>
