@@ -32,7 +32,7 @@ const BUCKETS = [{k:'d1', off:1, from:0, to:1, label:'0–1'}, {k:'d2', off:2, f
 const bucketFor = d => BUCKETS.find(b => d >= b.from && d <= b.to);
 
 const DEMO = location.hash === '#demo';
-const BUILD = '2026-11-20.1';   // bei jeder Änderung erhöhen (gleich wie version.txt)
+const BUILD = '2026-11-20.2';   // bei jeder Änderung erhöhen (gleich wie version.txt)
 // Neue Version automatisch laden, sobald die App wieder geöffnet wird
 async function checkUpdate(){
   try{ const v = (await fetch('version.txt?' + Date.now(), {cache:'no-store'}).then(r => r.ok ? r.text() : '')).trim();
@@ -254,6 +254,17 @@ async function computeAllStats(lat, lon, offSec){
   let station = null;
   try{ station = await loadObs(lat, lon, elev); }catch(err){ station = null; }
   const D = prepPrev(prev, station, offH);
+  // Regen-Kalibrierung: Wie viel Regen kam tatsächlich, verglichen mit dem Modell-Mittel (1 Tag Vorlauf, 8–20 Uhr)?
+  const rday = {};
+  if(station) for(let i=0;i<D.n;i++){ const h = D.lh[i]; if(!D.past[i] || h <= WIN_START || h > WIN_END) continue;
+    const r = (rday[D.lday[i]] ||= {i0:i, o:0, on:0, f:[], fn:0}); if(D.obsP[i] != null){ r.o += D.obsP[i]; r.on++; }
+    const v = MODELS.map(m => D.per[m.id]?.precipitation_previous_day1?.[i]).filter(x => x != null);
+    if(v.length >= 3){ r.f.push(mean(v)); r.fn++; } }
+  const rdays = Object.entries(rday).sort().map(([d,r]) => ({d, i0:r.i0, o:r.o, f:r.f.reduce((a,b)=>a+b,0), ok: r.on >= 10 && r.fn >= 10}));
+  // Faktor aus den Tagen vor Index i0 (max. 30 Tage), gedämpft und begrenzt
+  const rainK = before => { const h = rdays.filter(x => x.ok && x.i0 < before).slice(-WINDOW_DAYS);
+    if(h.length < 10) return 1; const so = h.reduce((a,x)=>a+x.o,0), sf = h.reduce((a,x)=>a+x.f,0); return clamp((so+2)/(sf+2), 0.4, 1.5); };
+  const kNow = station ? rainK(Infinity) : 1;
   const all = statsWindow(D, Math.max(0, D.n - WINDOW_DAYS*24), D.n, !!station);
   const W = weightsFrom(all, hilly);
   // Ortskorrektur in Worten: mittlere Abweichung der Modelle bei 1 Tag Vorlauf
@@ -289,7 +300,7 @@ async function computeAllStats(lat, lon, offSec){
       if(on >= 10 && full.length >= 3){
         const wetO = o >= 0.5; rain.days++;
         let sw = 0, sv = 0; for(const [id,v] of full){ const w = Ww[id] ? Ww[id].p : 1; sw += w; sv += w*v[0]; }
-        if((sv/sw >= 0.5) === wetO) rain.ours++;
+        if((sv/sw * rainK(s0) >= 0.5) === wetO) rain.ours++;
         if((mean(full.map(([id,v]) => v[0])) >= 0.5) === wetO) rain.avg++;
         for(const [id,v] of full){ (rain.per[id] ||= 0); if((v[0] >= 0.5) === wetO) rain.per[id]++; }
       }
@@ -325,7 +336,7 @@ async function computeAllStats(lat, lon, offSec){
       }
     }
   }
-  return {W, track, cityBias, nightBias, elev, hilly,
+  return {W, track, cityBias, nightBias, elev, hilly, rainK: kNow,
           station: station ? {name:station.name, by:station.by, dist:station.dist, elev:station.elev} : null};
 }
 
@@ -367,6 +378,13 @@ function build(data){
 
   const nowIdx = Math.max(0, time.findIndex(t => t >= now));
   const leadDay = i => Math.max(0, Math.floor((i - nowIdx)/24));
+
+  // Regen-Kalibrierung: Mengen um den lokal gemessenen Faktor anpassen (Radar bleibt unverändert)
+  const RK = ST && ST.rainK ? ST.rainK : 1;
+  if(RK !== 1){
+    for(const m of avail){ const A = per[m.id].precipitation; if(A) per[m.id].precipitation = A.map(x => x==null ? null : x*RK); }
+    for(const M of Object.values(members)) M.P = M.P.map(a => a.map(x => x==null ? null : x*RK));
+  }
 
   // Ortskorrektur: systematische Abweichung je Modell, Vorlaufzeit und Tageszeit abziehen
   const raw = {};
@@ -874,6 +892,8 @@ function trackBlock(R){
   let html = `<div class="explain"><p>Geprüft an echten Messwerten: ${where}.</p>`;
   if(S.cityBias != null && Math.abs(S.cityBias) >= 0.3)
     html += `<p><b>Ortskorrektur:</b> Die Modelle lagen hier zuletzt im Schnitt ${fmt1(Math.abs(S.cityBias))}° zu ${S.cityBias<0?'kalt':'warm'}${S.nightBias!=null && S.cityBias<0 && S.nightBias < S.cityBias-0.3 ? `, nachts bis ${fmt1(Math.abs(S.nightBias))}°` : ''}. Das wird ausgeglichen, getrennt nach Tageszeit.</p>`;
+  if(S.rainK && Math.abs(1 - S.rainK) >= 0.15)
+    html += `<p><b>Regenkorrektur:</b> Die Modelle sagten hier zuletzt rund ${Math.round(Math.abs(1 - S.rainK)*100)} % ${S.rainK < 1 ? 'zu viel' : 'zu wenig'} Regen voraus. Die Mengen werden entsprechend angepasst.</p>`;
   html += `</div>`;
   if(T){
     const leads = T.leads || [{lead:1, ours:T.ours, avg:T.avg}];
