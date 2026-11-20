@@ -32,7 +32,7 @@ const BUCKETS = [{k:'d1', off:1, from:0, to:1, label:'0–1'}, {k:'d2', off:2, f
 const bucketFor = d => BUCKETS.find(b => d >= b.from && d <= b.to);
 
 const DEMO = location.hash === '#demo';
-const BUILD = '2026-11-20.2';   // bei jeder Änderung erhöhen (gleich wie version.txt)
+const BUILD = '2026-11-20.3';   // bei jeder Änderung erhöhen (gleich wie version.txt)
 // Neue Version automatisch laden, sobald die App wieder geöffnet wird
 async function checkUpdate(){
   try{ const v = (await fetch('version.txt?' + Date.now(), {cache:'no-store'}).then(r => r.ok ? r.text() : '')).trim();
@@ -56,8 +56,13 @@ const dayName = (iso, i) => i===0 ? 'Heute' : WD[new Date(iso+'T12:00:00Z').getU
 const store = { get(k){ try{ return JSON.parse(localStorage.getItem(k)); }catch(e){ return null; } },
                 set(k,v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} } };
 
-async function getJSON(url){
-  const r = await fetch(url);
+// Jede Abfrage bricht nach spätestens ms ab, damit eine hängende Verbindung nie die App blockiert
+async function getJSON(url, ms = 15000){
+  const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), ms);
+  let r;
+  try{ r = await fetch(url, {signal: ctl.signal}); }
+  catch(e){ clearTimeout(tm); throw new Error(e.name === 'AbortError' ? 'Zeitüberschreitung' : (e.message || 'Netzwerkfehler')); }
+  clearTimeout(tm);
   if(!r.ok){ let m=''; try{ m=(await r.json()).reason; }catch(e){} throw new Error(m || ('HTTP '+r.status)); }
   return r.json();
 }
@@ -141,16 +146,20 @@ async function loadAll2(lat, lon, force){
   state.dataTime = Date.now(); state.stale = false;
   const d = {fc: fc.value, ens: ens.status==='fulfilled'? ens.value : null,
              errs: [ens].filter(x=>x.status!=='fulfilled').map(x=>String(x.reason&&x.reason.message||x.reason))};
+  let statsP = null;
   if(statsDue){
-    try{ S = await computeAllStats(lat, lon, fc.value.utc_offset_seconds); S.t = Date.now(); S.v = BUILD; store.set(skey, S); }
-    catch(e){ if(!S) d.errs.push('Prüfdaten: ' + (e.message||e)); }
+    // läuft im Hintergrund; die Seite erscheint sofort und wird danach mit den Prüfdaten neu gezeichnet
+    statsP = computeAllStats(lat, lon, fc.value.utc_offset_seconds)
+      .then(N => { N.t = Date.now(); N.v = BUILD; store.set(skey, N); return N; })
+      .catch(() => null);
+    if(S && S.v !== BUILD) S = null;
   }
   try{
     Object.keys(localStorage).filter(k => /^wxs?:\d/.test(k) && k!==key && k!==skey)
       .map(k => ({k, t:(store.get(k)||{}).t||0})).sort((a,b)=>b.t-a.t).slice(4).forEach(x => localStorage.removeItem(x.k));
   }catch(e){}
   store.set(key, {t:Date.now(), d});
-  return {...d, stats:S};
+  return {...d, stats:S, statsP};
 }
 
 /* ============ Messwerte: Innenstadt (LMU) oder nächste DWD-Station ============ */
@@ -164,7 +173,7 @@ async function loadObs(lat, lon, elev){
   }
   const from = new Date(Date.now() - PAST_DAYS*864e5).toISOString().slice(0,10);
   const to = new Date().toISOString().slice(0,13) + ':00';
-  const j = await getJSON(`https://api.brightsky.dev/weather?lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}&date=${from}&last_date=${to}&tz=Etc/UTC`);
+  const j = await getJSON(`https://api.brightsky.dev/weather?lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}&date=${from}&last_date=${to}&tz=Etc/UTC`, 30000);
   const src = (j.sources||[]).filter(s => s.observation_type !== 'forecast');
   // Station: höchstens 25 km entfernt und höchstens 150 m Höhenunterschied
   const pick = src.filter(s => s.distance <= 25000 && (elev==null || s.height==null || Math.abs(s.height - elev) <= 150))
@@ -246,7 +255,7 @@ function weightsFrom(S, hilly){
 
 async function computeAllStats(lat, lon, offSec){
   const u = urls(lat, lon), offH = Math.round(offSec/3600);
-  const [prev, el] = await Promise.all([getJSON(u.prev), getJSON(u.elev).catch(() => null)]);
+  const [prev, el] = await Promise.all([getJSON(u.prev, 30000), getJSON(u.elev).catch(() => null)]);
   const e = el && el.elevation ? el.elevation.filter(v => v!=null) : null;
   const elev = e && e.length ? e[0] : null;
   const sd = e && e.length > 3 ? Math.sqrt(mean(e.map(v => (v - mean(e))**2))) : 0;
@@ -1016,23 +1025,30 @@ const DEFAULT_PLACE = {name:'München', lat:48.137, lon:11.575};
 // Koordinaten auf ca. 1 km runden: genauer braucht es kein Wettermodell, und es gibt weniger über den Standort preis
 function setPlace(p){ p = {...p, lat: Math.round(p.lat*100)/100, lon: Math.round(p.lon*100)/100}; store.set('wx:place', p); state.place = p; load(); }
 
-let loading = false;
+let loading = false, loadSeq = 0;
 async function load(force){
-  if(loading) return; loading = true;
+  const my = ++loadSeq; loading = true;
   const p = state.place;
-  if(!$('#app').querySelector('.hero')) $('#app').innerHTML = '<div class="loading"><div class="spin"></div>Lade Modelle …</div>';
+  const shown = $('#app').querySelector('.hero .place');
+  if(!shown || shown.textContent !== p.name) $('#app').innerHTML = `<div class="loading"><div class="spin"></div>Lade ${esc(p.name)} …</div>`;
   try{
     const data = await loadAll(p.lat, p.lon, force);
+    if(my !== loadSeq) return;                      // inzwischen wurde ein anderer Ort gewählt
     state.fetched = Date.now();
-    state.warn = '';
-    if(state.stale) state.warn = 'Keine Verbindung – du siehst den Stand von ' + hhmm(state.dataTime) + '. Zum Aktualisieren nach unten ziehen.';
-    else if(data.errs && data.errs.length) state.warn = 'Teilweise ohne Daten: ' + esc(data.errs.join(' · ')) + ' – Vorhersage läuft mit den übrigen Quellen.';
-    const R = build(data);
-    state.res = R;
-    render(p, R);
+    const show = d => {
+      state.warn = '';
+      if(state.stale) state.warn = 'Keine Verbindung – du siehst den Stand von ' + hhmm(state.dataTime) + '. Zum Aktualisieren nach unten ziehen.';
+      else if(d.errs && d.errs.length) state.warn = 'Teilweise ohne Daten: ' + esc(d.errs.join(' · ')) + ' – Vorhersage läuft mit den übrigen Quellen.';
+      const R = build(d); state.res = R; render(p, R);
+    };
+    show(data); ptrDone();
+    if(data.statsP){
+      const N = await data.statsP;
+      if(N && my === loadSeq){ const y = window.scrollY; show({...data, stats: N}); window.scrollTo(0, y); }
+    }
   }catch(e){
-    $('#app').innerHTML = `<div class="hero"><div class="place">${esc(p.name)}</div></div><div class="err">Daten konnten nicht geladen werden: ${esc(e.message||e)}<br>Zum erneuten Versuch nach unten ziehen.</div>`;
-  }finally{ loading = false; ptrDone(); }
+    if(my === loadSeq) $('#app').innerHTML = `<div class="hero"><div class="place">${esc(p.name)}</div></div><div class="err">Daten konnten nicht geladen werden: ${esc(e.message||e)}<br>Zum erneuten Versuch nach unten ziehen.</div>`;
+  }finally{ if(my === loadSeq){ loading = false; ptrDone(); } }
 }
 const hhmm = t => new Date(t).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'});
 function updatedTxt(){
@@ -1044,7 +1060,7 @@ function updatedTxt(){
 /* ================= Ziehen zum Aktualisieren ================= */
 const ptr = $('#ptr'); let ptrY = null, ptrD = 0;
 window.addEventListener('touchstart', e => {
-  if(window.scrollY <= 0 && !$('#sheet').classList.contains('open') && !document.body.classList.contains('mapopen') && !e.target.closest('.hours,#map'))
+  if(window.scrollY < 5 && !$('#sheet').classList.contains('open') && !document.body.classList.contains('mapopen') && !e.target.closest('.hours,#map'))
     ptrY = e.touches[0].clientY; else ptrY = null;
 }, {passive:true});
 window.addEventListener('touchmove', e => {
@@ -1056,7 +1072,7 @@ window.addEventListener('touchmove', e => {
 }, {passive:true});
 window.addEventListener('touchend', () => {
   if(ptrY==null) return;
-  if(ptrD > 75 && !loading){ ptr.classList.add('spin'); ptr.style.transform = 'translateY(26px)'; load(true); }
+  if(ptrD > 75){ ptr.classList.add('spin'); ptr.style.transform = 'translateY(26px)'; load(true); }
   else ptrDone();
   ptrY = null; ptrD = 0;
 });
