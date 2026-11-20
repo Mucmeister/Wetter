@@ -11,7 +11,7 @@ permissions:
   contents: write
 concurrency:
   group: jetzt
-  cancel-in-progress: true
+  cancel-in-progress: false
 jobs:
   now:
     runs-on: ubuntu-latest
@@ -30,5 +30,6 @@ jobs:
               (cd /tmp/live && git init -q -b live && git add now.json && git commit -qm "Aktueller Messwert" \
                 && git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" live) || echo "Push fehlgeschlagen"
             fi
-            [ $i -lt 6 ] && sleep 590
+            if [ $i -lt 6 ]; then sleep 590; fi
           done
+          exit 0
