@@ -95,6 +95,7 @@ function urls(lat, lon){
   const ids = MODELS.map(m=>m.id).join(',');
   const prevVars = ['temperature_2m','precipitation'];
   for(const v of ['temperature_2m','precipitation']) for(const b of BUCKETS) prevVars.push(`${v}_previous_day${b.off}`);
+  prevVars.push('temperature_2m_previous_day3', 'temperature_2m_previous_day5');   // nur für die Trefferbilanz in 3 und 5 Tagen
   // Geländeprüfung: Ort + 6 Punkte im Abstand von ~15 km
   const ring = [[0,0]].concat([0,60,120,180,240,300].map(a => [Math.cos(a*Math.PI/180)*0.135, Math.sin(a*Math.PI/180)*0.135/Math.cos(lat*Math.PI/180)]));
   return {
@@ -298,6 +299,30 @@ async function computeAllStats(lat, lon, offSec){
       track = {days, ours: acc.ours[0]/acc.ours[1], avg: acc.avg[0]/acc.avg[1], best: pm[0], models: pm};
       if(rain.days >= 5){ const bp = Object.entries(rain.per).sort((a,b) => b[1]-a[1])[0];
         track.rain = {days: rain.days, ours: rain.ours, avg: rain.avg, best: bp ? {id: bp[0], hits: bp[1]} : null}; }
+      // Bilanz für längere Vorlaufzeiten (3 und 5 Tage), gleiche Methode: Korrektur + Gewichte nur aus der Zeit davor
+      track.leads = [{lead: 1, ours: track.ours, avg: track.avg}];
+      for(const L of [3, 5]){
+        const key = `temperature_2m_previous_day${L}`, ok = MODELS.filter(m => D.per[m.id]?.[key]);
+        let so = 0, sa = 0, nn = 0;
+        for(const s0 of use){
+          if(s0 < 20*24) continue;
+          const Wl = {}, Bl = {}, errs = [];
+          for(const m of ok){ const F = D.per[m.id][key], sm = new Array(BINS).fill(0), c = new Array(BINS).fill(0);
+            for(let i=Math.max(0, s0-WINDOW_DAYS*24); i<s0; i++){ if(!D.past[i] || F[i]==null || D.obsT[i]==null) continue; const k = binOf(D.lh[i]); sm[k] += F[i]-D.obsT[i]; c[k]++; }
+            if(c.reduce((a,b)=>a+b,0) < 72) continue;
+            Bl[m.id] = sm.map((x,k) => x/(c[k]+12));
+            let a = 0, q = 0; for(let i=Math.max(0, s0-WINDOW_DAYS*24); i<s0; i++){ if(!D.past[i] || F[i]==null || D.obsT[i]==null) continue; a += Math.abs(F[i]-Bl[m.id][binOf(D.lh[i])]-D.obsT[i]); q++; }
+            errs.push([m, a/q]); }
+          if(errs.length < 3) continue;
+          const md = median(errs.map(e => e[1]));
+          for(const [m, e] of errs) Wl[m.id] = m.prior * clamp(Math.pow(md/Math.max(e,0.15), 2), 0.35, 2.5);
+          for(let i=s0;i<s0+24;i++){ const o = D.obsT[i]; if(o==null) continue;
+            let sw=0, sv=0; const raw=[];
+            for(const [m] of errs){ const f = D.per[m.id][key][i]; if(f==null) continue; raw.push(f); sw += Wl[m.id]; sv += Wl[m.id]*(f - Bl[m.id][binOf(D.lh[i])]); }
+            if(raw.length < 3) continue; so += Math.abs(sv/sw - o); sa += Math.abs(mean(raw) - o); nn++; }
+        }
+        if(nn >= 24*5) track.leads.push({lead: L, ours: so/nn, avg: sa/nn});
+      }
     }
   }
   return {W, track, cityBias, nightBias, elev, hilly,
@@ -851,12 +876,16 @@ function trackBlock(R){
     html += `<p><b>Ortskorrektur:</b> Die Modelle lagen hier zuletzt im Schnitt ${fmt1(Math.abs(S.cityBias))}° zu ${S.cityBias<0?'kalt':'warm'}${S.nightBias!=null && S.cityBias<0 && S.nightBias < S.cityBias-0.3 ? `, nachts bis ${fmt1(Math.abs(S.nightBias))}°` : ''}. Das wird ausgeglichen, getrennt nach Tageszeit.</p>`;
   html += `</div>`;
   if(T){
-    const best = ALL_MODELS.find(m => m.id === T.best.id);
-    const rows = [['Diese Seite', T.ours, 'us'], [`Bestes Einzelmodell (${best ? best.name : T.best.id})`, T.best.mae, ''], ['Durchschnitt aller Modelle', T.avg, '']];
-    const mx = Math.max(...rows.map(r => r[1]));
+    const leads = T.leads || [{lead:1, ours:T.ours, avg:T.avg}];
+    const mx = Math.max(...leads.map(l => Math.max(l.ours, l.avg)));
+    const lbl = L => L === 1 ? '1 Tag im Voraus' : `${L} Tage im Voraus`;
+    const f1 = v => v.toLocaleString('de-DE', {minimumFractionDigits:1, maximumFractionDigits:1});
+    const gains = leads.map(l => Math.round((1 - l.ours/l.avg)*100));
     html += `<div class="dsec" style="padding:0 16px">Trefferbilanz Temperatur · letzte ${T.days} Tage</div><div class="track">` +
-      rows.map(r => `<div class="trow ${r[2]}"><div>${r[0]}</div><div class="tb"><i style="width:${Math.round(r[1]/mx*100)}%"></i></div><div class="r">±${fmt2(r[1])}°</div></div>`).join('') +
-      `</div><div class="explain" style="padding-top:2px">${(1 - T.ours/T.avg) >= 0.05 ? `<b>${Math.round((1 - T.ours/T.avg)*100)} % genauer</b> als der Durchschnitt aller Modelle. ` : T.ours <= T.avg ? 'Hier etwa gleichauf mit dem Durchschnitt der Modelle. ' : ''}Mittlere Abweichung für den nächsten Tag, Stunde für Stunde (kürzer ist besser). Für jeden Tag wurde nur genutzt, was vorher bekannt war.</div>`;
+      leads.map(l => `<div class="tl">${lbl(l.lead)}</div>
+        <div class="trow us"><div>Diese Seite</div><div class="tb"><i style="width:${Math.round(l.ours/mx*100)}%"></i></div><div class="r">±${f1(l.ours)}°</div></div>
+        <div class="trow"><div>Durchschnitt der Modelle</div><div class="tb"><i style="width:${Math.round(l.avg/mx*100)}%"></i></div><div class="r">±${f1(l.avg)}°</div></div>`).join('') +
+      `</div><div class="explain" style="padding-top:2px">${Math.min(...gains) >= 5 ? `<b>${Math.min(...gains) === Math.max(...gains) ? gains[0] : Math.min(...gains) + '–' + Math.max(...gains)} % genauer</b> als der Durchschnitt der Modelle. ` : ''}Mittlere Abweichung der Temperatur, Stunde für Stunde (kürzer ist besser). Für jeden Tag wurde nur genutzt, was vorher bekannt war.</div>`;
     if(T.rain){
       const r = T.rain, bm = r.best && ALL_MODELS.find(m => m.id === r.best.id);
       const rr = [['Diese Seite', r.ours, 'us'], [`Bestes Einzelmodell (${bm ? bm.name : '–'})`, r.best ? r.best.hits : 0, ''], ['Durchschnitt aller Modelle', r.avg, '']];
