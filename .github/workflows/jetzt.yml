@@ -1,27 +1,34 @@
 name: Aktueller Messwert LMU
+# GitHub startet Zeitpläne nur etwa stündlich zuverlässig. Deshalb läuft jeder Start knapp eine Stunde
+# und holt dabei alle 10 Minuten den aktuellen Wert.
 on:
   schedule:
-    - cron: '*/10 * * * *'   # alle 10 Minuten (GitHub startet oft etwas verzögert)
+    - cron: '7 * * * *'
   workflow_dispatch:
   push:
     paths: ['tools/lmu-now.js', '.github/workflows/jetzt.yml']
 permissions:
   contents: write
-concurrency: jetzt
+concurrency:
+  group: jetzt
+  cancel-in-progress: true
 jobs:
   now:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 62
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: {node-version: 20}
-      - run: node tools/lmu-now.js
-      - name: In Zweig "live" ablegen (nur eine Version, keine wachsende Historie)
+      - name: Alle 10 Minuten Messwert holen und im Zweig "live" ablegen
         run: |
-          mkdir /tmp/live && cp now.json /tmp/live/ && cd /tmp/live
-          git init -q -b live
-          git config user.name "wetter-bot"
-          git config user.email "wetter-bot@users.noreply.github.com"
-          git add now.json && git commit -qm "Aktueller Messwert"
-          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" live
+          git config --global user.name "wetter-bot"
+          git config --global user.email "wetter-bot@users.noreply.github.com"
+          for i in 1 2 3 4 5 6; do
+            if node tools/lmu-now.js; then
+              rm -rf /tmp/live && mkdir /tmp/live && cp now.json /tmp/live/
+              (cd /tmp/live && git init -q -b live && git add now.json && git commit -qm "Aktueller Messwert" \
+                && git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" live) || echo "Push fehlgeschlagen"
+            fi
+            [ $i -lt 6 ] && sleep 590
+          done

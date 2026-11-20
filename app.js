@@ -489,7 +489,9 @@ function build(data){
   }
   // In der Innenstadt hat die LMU-Station Vorrang (max. 60 Min. alt)
   const LN = data.lmuNow;
-  if(LN && LN.t != null && (Date.now() - Date.parse(LN.time))/60e3 <= 60){
+  // LMU bevorzugen, solange der Wert frisch ist (≤ 30 Min.) oder frischer als der DWD-Wert (max. 90 Min.)
+  const lnAge = LN && LN.time ? (Date.now() - Date.parse(LN.time))/60e3 : 999;
+  if(LN && LN.t != null && (lnAge <= 30 || (lnAge <= 90 && (!curObs || lnAge <= curObs.age)))){
     const P = state.place || {}, from = P.exact || null;
     curObs = {t: LN.t, name: 'LMU-Station Theresienstraße', dist: km(from ? from.lat : P.lat, from ? from.lon : P.lon, LN.lat, LN.lon),
               age: (Date.now() - Date.parse(LN.time))/60e3, fromYou: !!from};
