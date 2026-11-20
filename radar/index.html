@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Radar">
+<link rel="apple-touch-icon" sizes="180x180" href="icon-180.png">
+<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0d1a28">
+<meta name="format-detection" content="telephone=no">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob: https://tile.openstreetmap.org https://view.eumetsat.int https://maps.dwd.de; connect-src 'self' https://api.brightsky.dev https://raw.githubusercontent.com; worker-src 'self'; manifest-src 'self'; base-uri 'self'; form-action 'none'; object-src 'none'">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<title>Regenradar</title>
+<link rel="stylesheet" href="../vendor/leaflet/leaflet.css">
+<style>
+:root{--fg:#f3eee4;--fg2:rgba(243,238,228,.72);--fg3:rgba(243,238,228,.5);--brass:#d9b26f;--panel:rgba(13,26,40,.82);--line:rgba(243,238,228,.12)}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:#0d1a28;color:var(--fg);overflow:hidden;overscroll-behavior:none;
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",Arial,sans-serif;-webkit-user-select:none;user-select:none}
+#map{position:fixed;inset:0;background:#0d1a28}
+.leaflet-container{background:#0d1a28;font:inherit}
+.basemap{filter:invert(1) hue-rotate(185deg) brightness(.72) contrast(.9) saturate(.3)}
+.sat .basemap{filter:none}
+.radarimg{image-rendering:auto}
+.leaflet-control-attribution{background:rgba(13,26,40,.6)!important;color:var(--fg3)!important;font-size:9px!important}
+.leaflet-control-attribution a{color:var(--fg2)!important}
+.city{color:#f3eee4;font-size:12px;font-weight:600;white-space:nowrap;text-shadow:0 0 3px #0d1a28,0 0 3px #0d1a28,0 0 6px #0d1a28;pointer-events:none}
+.city i{display:inline-block;width:4px;height:4px;border-radius:50%;background:#f3eee4;margin-right:4px;vertical-align:2px}
+.leaflet-zoom-anim .city,.minor{transition:none}
+.z5 .minor,.z6 .minor{display:none}
+.me{width:16px;height:16px;border-radius:50%;background:var(--brass);border:3px solid #fff;box-shadow:0 0 0 2px rgba(13,26,40,.6),0 1px 6px rgba(0,0,0,.5)}
+
+.top{position:fixed;left:0;right:0;top:0;padding:calc(env(safe-area-inset-top) + 8px) 12px 0;display:flex;gap:8px;align-items:flex-start;pointer-events:none;z-index:1000}
+.top > *{pointer-events:auto}
+.title{background:var(--panel);-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);border-radius:14px;padding:8px 12px;margin-right:auto}
+.title b{display:block;font-size:15px;color:var(--brass);letter-spacing:.3px}
+.title span{font-size:12px;color:var(--fg2)}
+.btn{background:var(--panel);-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);border:0;color:var(--fg);width:44px;height:44px;border-radius:14px;display:grid;place-items:center;cursor:pointer}
+.btn svg{width:20px;height:20px}
+.btn.on{color:var(--brass)}
+
+.bottom{position:fixed;left:0;right:0;bottom:0;padding:0 10px calc(env(safe-area-inset-bottom) + 10px);z-index:1000;pointer-events:none}
+.bottom > *{pointer-events:auto}
+.row{display:flex;gap:8px;align-items:center;margin-bottom:8px}
+.chip{background:var(--panel);-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);border:1px solid var(--line);color:var(--fg2);border-radius:12px;padding:9px 14px;font-size:14px;font-weight:600;cursor:pointer}
+.chip.on{color:#0d1a28;background:var(--brass);border-color:var(--brass)}
+.here{margin-left:auto;background:var(--panel);-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);border-radius:12px;padding:8px 12px;font-size:13px;color:var(--fg);max-width:52%;text-align:right;line-height:1.25}
+.here:empty{display:none}
+.panel{background:var(--panel);-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);border-radius:18px;padding:10px 12px 12px}
+.timeline{display:flex;align-items:center;gap:12px}
+.clock{width:96px;flex:none}
+.clock b{display:block;font-size:24px;font-weight:600;font-variant-numeric:tabular-nums;line-height:1.05}
+.clock span{display:block;font-size:10.5px;line-height:1.25;color:var(--fg2);text-transform:uppercase;letter-spacing:.4px}
+.clock span.fc{color:var(--brass)}
+.slider{flex:1;position:relative;height:44px;touch-action:none}
+.track{position:absolute;left:0;right:0;top:20px;height:4px;border-radius:2px;background:rgba(243,238,228,.25)}
+.track .past{position:absolute;left:0;top:0;bottom:0;background:rgba(243,238,228,.75);border-radius:2px}
+.track .fut{position:absolute;right:0;top:0;bottom:0;background:var(--brass);border-radius:2px;opacity:.9}
+.track .load{position:absolute;top:-3px;width:2px;height:10px;background:var(--fg3);border-radius:1px}
+.track .load.ok{display:none}
+.knob{position:absolute;top:10px;width:24px;height:24px;margin-left:-12px;border-radius:50%;background:#fff;box-shadow:0 1px 6px rgba(0,0,0,.45)}
+.nowmark{position:absolute;top:13px;width:2px;height:18px;margin-left:-1px;background:#fff;border-radius:1px;opacity:.9}
+.ticks{position:absolute;left:0;right:0;top:32px;font-size:10px;color:var(--fg3)}
+.ticks span{position:absolute;transform:translateX(-50%);white-space:nowrap}
+.play{width:48px;height:48px;border-radius:50%;border:0;background:var(--brass);color:#0d1a28;display:grid;place-items:center;cursor:pointer;flex:none}
+.play svg{width:20px;height:20px}
+.legend{display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:8px;font-size:11px;color:var(--fg2)}
+.legend span{display:inline-flex;align-items:center;gap:5px}
+.legend i{display:inline-block;width:22px;height:8px;border-radius:2px}
+.msg{font-size:12px;color:var(--fg2);margin-top:6px}
+.msg:empty{display:none}
+.msg.err{color:#ffb4a8}
+.progress{position:fixed;left:0;top:0;height:3px;background:var(--brass);z-index:1001;transition:width .2s,opacity .4s;width:0}
+
+#sheet{position:fixed;inset:0;background:rgba(5,10,18,.55);z-index:2000;display:none;align-items:flex-end}
+#sheet.open{display:flex}
+#sheet .in{background:#13263a;border-radius:20px 20px 0 0;padding:18px 18px calc(env(safe-area-inset-bottom) + 18px);width:100%;max-height:80vh;overflow:auto;-webkit-user-select:text;user-select:text}
+#sheet h2{font-size:17px;color:var(--brass);margin:0 0 10px}
+#sheet p{font-size:14px;line-height:1.45;color:var(--fg2);margin:0 0 10px}
+#sheet p b{color:var(--fg)}
+#sheet .close{float:right}
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div class="progress" id="progress"></div>
+
+<div class="top">
+  <div class="title"><b>Regenradar</b><span id="sub">Deutschland · DWD</span></div>
+  <button class="btn" id="btnLoc" aria-label="Mein Standort"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l18-8-8 18-2-8z"/></svg></button>
+  <button class="btn" id="btnInfo" aria-label="Erklärung"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.01"/></svg></button>
+</div>
+
+<div class="bottom">
+  <div class="row">
+    <button class="chip on" id="chipRadar">Radar</button>
+    <button class="chip" id="chipSat">Satellit</button>
+    <div class="here" id="here"></div>
+  </div>
+  <div class="panel">
+    <div class="timeline">
+      <div class="clock"><b id="clock">--:--</b><span id="kind">lädt …</span></div>
+      <div class="slider" id="slider">
+        <div class="track"><div class="past" id="tPast"></div><div class="fut" id="tFut"></div><div id="loads"></div></div>
+        <div class="nowmark" id="nowmark"></div>
+        <div class="knob" id="knob"></div>
+        <div class="ticks" id="ticks"></div>
+      </div>
+      <button class="play" id="play" aria-label="Abspielen"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15l13-7.5z"/></svg></button>
+    </div>
+    <div class="legend" id="legend"></div>
+    <div class="msg" id="msg"></div>
+  </div>
+</div>
+
+<div id="sheet"><div class="in">
+  <button class="btn close" id="sheetClose" aria-label="Schließen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+  <h2>So entsteht das Bild</h2>
+  <p><b>Radar:</b> Messungen der 17 Wetterradare des Deutschen Wetterdienstes (DWD), alle 5 Minuten, 1 km Auflösung. Abgedeckt sind Deutschland und die grenznahen Gebiete.</p>
+  <p><b>Vorhersage (bis +2 Std.):</b> Die Vorhersage des DWD schiebt die Regengebiete in ihrer Zugrichtung weiter. Ob sich Regen dabei abschwächt oder neu bildet, steckt darin nicht. Je weiter in der Zukunft, desto unsicherer.</p>
+  <p><b>Niederschlagsart:</b> Der DWD bestimmt mit seinen Radaren, ob es regnet, schneit, Schneeregen, Graupel oder Hagel gibt. Für die Vorhersage wird die zuletzt gemessene Lage verwendet. <span id="hgInfo"></span></p>
+  <p><b>Satellit:</b> Meteosat-12 (EUMETSAT), tagsüber in natürlichen Farben, nachts Wolken im Infrarot. Die Bilder kommen mit etwa 20–30 Minuten Verzögerung, für die Vorhersage gibt es kein Satellitenbild.</p>
+  <p><b>Farben:</b> hell = leicht, dunkel = stark. Blau Regen (Rot bei Starkregen), Rosa Schnee, Violett Schneeregen, Gelb Graupel, Orange Hagel, Grün gefrierender Regen (Glätte).</p>
+  <p style="font-size:12px">Daten: DWD über Bright Sky · EUMETSAT · Karte © OpenStreetMap</p>
+</div></div>
+
+<script src="../vendor/leaflet/leaflet.js"></script>
+<script src="radar.js"></script>
+</body>
+</html>
