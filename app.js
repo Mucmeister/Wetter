@@ -32,7 +32,7 @@ const BUCKETS = [{k:'d1', off:1, from:0, to:1, label:'0–1'}, {k:'d2', off:2, f
 const bucketFor = d => BUCKETS.find(b => d >= b.from && d <= b.to);
 
 const DEMO = location.hash === '#demo';
-const BUILD = '2026-11-20.4';   // bei jeder Änderung erhöhen (gleich wie version.txt)
+const BUILD = '2026-11-20.5';   // bei jeder Änderung erhöhen (gleich wie version.txt)
 // Neue Version automatisch laden, sobald die App wieder geöffnet wird
 async function checkUpdate(){
   try{ const v = (await fetch('version.txt?' + Date.now(), {cache:'no-store'}).then(r => r.ok ? r.text() : '')).trim();
@@ -472,6 +472,18 @@ function build(data){
     }
   }
 
+  // ===== Regenmesser der LMU-Station: nur bis 3 km, nur wenn frisch (≤ 30 Min.), nur wenn das Radar trocken meldet =====
+  let gauge = null;
+  const LG = data.lmuNow;
+  if(LG && LG.rain_mmh != null && LG.rain_mmh >= 0.05 && LG.time && (Date.now() - Date.parse(LG.time))/60e3 <= 30){
+    const P = state.place || {}, from = P.exact || P;
+    if(km(from.lat, from.lon, LG.lat, LG.lon) <= 3 && !(NC && NC.rateNow >= 0.1)){
+      gauge = {mmh: LG.rain_mmh};
+      const H0 = hourly[nowIdx];
+      if(H0){ H0.prcp = Math.max(H0.prcp || 0, LG.rain_mmh, 0.1); H0.pr = 0.9; }
+    }
+  }
+
   // ===== Gemessene Temperatur für „Jetzt“ (nächste DWD-Station, max. 20 km, ähnliche Höhe, max. 90 Min. alt) =====
   let curObs = null;
   const CW = data.current;
@@ -561,7 +573,7 @@ function build(data){
   for(const m of MODELS){ const D = dailyPer[m.id]; if(D && D.sunrise && D.sunrise[0]){ sun = {rise:D.sunrise, set:D.sunset}; break; } }
   if(!sun && fc.daily && fc.daily.sunrise) sun = {rise: fc.daily.sunrise, set: fc.daily.sunset};
 
-  return {hourly, days, cur, nowIdx, W, ST, avail, per, members, sun, now, meta:fc, NC, curObs, alerts: data.alerts};
+  return {hourly, days, cur, nowIdx, W, ST, avail, per, members, sun, now, meta:fc, NC, curObs, gauge, alerts: data.alerts};
 }
 
 // Radar auswerten: Werte in 0,01 mm je 5 Min.; Ort = latlon_position im Raster, dazu Nachbarschaft ±1 Pixel
@@ -578,9 +590,11 @@ function nowcast(radar, offSec){
   if(frames.length < 6) return null;
   const past = frames.filter(f => f.ms <= nowMs);
   const cur = past.length ? past[past.length-1] : frames[0];
-  // aktuelle Stärke: Mittel der letzten 15 Min., als mm/h
-  const recent = past.slice(-3);
-  const rateNow = recent.length ? mean(recent.map(f => f.mm))*12 : cur.mm*12;
+  // aktuelle Stärke (mm/h): Regenbeginn sofort aus dem neuesten Bild,
+  // „trocken“ erst, wenn auch das Bild davor trocken war (verhindert Flackern)
+  const lastF = past.length ? past[past.length-1] : frames[0], prevF = past.length > 1 ? past[past.length-2] : null;
+  const wetMM = 0.1/12;
+  const rateNow = lastF.mm >= wetMM ? lastF.mm*12 : (prevF && prevF.mm >= wetMM ? prevF.mm*12 : 0);
   const toLocal = ms => new Date(ms + offSec*1000).toISOString().slice(0,16);
   const last = frames[frames.length-1].ms;
   return {
@@ -955,7 +969,10 @@ function makeSummary(R){
   const rainH = rest.find(h => h.pr>=0.5 && h.prcp>=0.2);
   const dry = !rest.some(h => h.pr>=0.3 && h.prcp>=0.1);
   let s = '';
-  if(R.NC){
+  if(R.gauge){
+    s = `${R.gauge.mmh < 0.5 ? 'Nieselregen' : 'Regen'} an der LMU-Station gemessen, das Radar sieht ihn nicht`;
+  }
+  else if(R.NC){
     const ch = R.NC.change();
     if(R.NC.rateNow >= 0.1) s = `Laut Radar regnet es gerade${ch ? `, voraussichtlich bis etwa ${ch.at} Uhr` : ''}`;
     else if(ch && ch.wet) s = `Laut Radar trocken, ${ch.light ? 'leichter Regen' : 'Regen'} ab etwa ${ch.at} Uhr`;
@@ -963,7 +980,7 @@ function makeSummary(R){
     const later = R.hourly.slice(R.nowIdx+3, R.nowIdx+12).find(h => h.pr>=0.5 && h.prcp>=0.2);
     if(R.NC.rateNow < 0.1 && !(ch && ch.wet) && later) s += `, danach Regen ab etwa ${later.t.slice(11,13)} Uhr`;
   }
-  else if(rainH && rainH.i===R.nowIdx) s = 'Es regnet gerade';
+  else if(['rain','thunder','snow'].includes(hourCond(R.hourly[R.nowIdx]).k) || (rainH && rainH.i===R.nowIdx)) s = 'Es regnet gerade';
   else if(rainH) s = `Regen wahrscheinlich ab etwa ${rainH.t.slice(11,13)} Uhr`;
   else if(dry) s = 'In den nächsten 12 Stunden trocken';
   else s = 'Vereinzelt Schauer möglich';
