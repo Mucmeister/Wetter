@@ -8,47 +8,35 @@ jobs:
     steps:
       - run: |
           set +e; mkdir out && cd out
-          W='https://maps.dwd.de/geoserver/dwd/wms'
-          curl -s -m 60 "$W?service=WMS&version=1.3.0&request=GetCapabilities" -o cap.xml
+          NOW=$(date -u +%s); f(){ date -u -d @$(( ($NOW + $1*60)/300*300 )) +%Y-%m-%dT%H:%M; }
+          for r in "-120 0" "0 120" "-180 -150" "-5 -5" "60 60"; do set -- $r
+            curl -s -m 60 -o bs.json -w "bs $(f $1)..$(f $2) %{http_code} %{size_download} %{time_total}s " "https://api.brightsky.dev/radar?format=compressed&date=$(f $1)Z&last_date=$(f $2)Z&tz=Etc/UTC"
+            python3 -c "import json;d=json.load(open('bs.json'));r=d.get('radar',[]);print(len(r), r[0]['timestamp'] if r else '', r[-1]['timestamp'] if r else '', [k for k in r[0]] if r else d)" ; done >> bs.txt 2>&1
+          curl -s -m 60 -o bsb.json "https://api.brightsky.dev/radar?format=plain&date=$(f -5)Z&last_date=$(f -5)Z&bbox=100,100,300,300"
+          python3 -c "import json;d=json.load(open('bsb.json'));r=d['radar'];p=r[0]['precipitation_5'];print('bbox plain', len(p), len(p[0]), d.get('bbox'), d.get('geometry'))" >> bs.txt 2>&1
+          python3 -c "
+          import json,base64,zlib,array
+          d=json.load(open('bs.json'));r=d['radar'][0];raw=zlib.decompress(base64.b64decode(r['precipitation_5']))
+          print('compressed frame bytes', len(r['precipitation_5']), 'raw', len(raw), 'items', len(raw)//2, 'max', max(array.array('H',raw)))" >> bs.txt 2>&1
+          W='https://maps.dwd.de/geoserver/dwd/wms'; BB='5.5,47,15.5,55.2'
+          for k in 1 2 3; do T=$(date -u -d @$(( (NOW - k*900)/300*300 )) +%Y-%m-%dT%H:%M:00.000Z)
+            curl -s -m 90 -o /dev/null -w "wms Radar $T %{http_code} %{size_download} %{time_total}s\n" "$W?service=WMS&version=1.1.1&request=GetMap&layers=dwd:Radar_rv_product_1x1km_ger&styles=&format=image/png&transparent=true&srs=EPSG:3857&bbox=600000,5900000,1700000,7400000&width=512&height=512&time=$T" ; done >> wms.txt
+          curl -s -m 90 "https://view.eumetsat.int/geoserver/wms?service=WMS&version=1.3.0&request=GetCapabilities" -o ev.xml
+          curl -sI -m 60 "https://view.eumetsat.int/geoserver/wms?service=WMS&version=1.3.0&request=GetCapabilities" -H 'Origin: https://mucmeister.github.io' > cors_ev.txt
           python3 - <<'PY'
           import re
-          s=open('cap.xml').read()
-          out=open('layers.txt','w')
+          s=open('ev.xml').read(); out=open('ev_layers.txt','w')
           for m in re.finditer(r'<Layer[^>]*>\s*<Name>([^<]+)</Name>\s*<Title>([^<]*)</Title>(.*?)</Layer>', s, re.S):
-              n,t,body=m.groups()
-              if re.search(r'(?i)radar|sat|nieder|hg|hymec|schnee|snow|wn|rv|blitz|light', n+t):
-                  dims=re.findall(r'<Dimension[^>]*name="([^"]+)"[^>]*default="([^"]*)"[^>]*>([^<]{0,300})', body)
-                  st=re.findall(r'<Style>\s*<Name>([^<]+)</Name>', body)
-                  out.write(f"{n} | {t} | styles={st} | dims={dims}\n")
+              n,t,b=m.groups(); d=re.findall(r'<Dimension[^>]*name="time"[^>]*default="([^"]*)"[^>]*>([^<]{0,120})', b)
+              out.write(f"{n} | {t} | {d}\n")
           PY
-          curl -sI "$W?service=WMS&version=1.3.0&request=GetCapabilities" -H 'Origin: https://mucmeister.github.io' > cors_wms.txt
-          BB='5.5,47,15.5,55.2'
-          for L in dwd:Niederschlagsradar dwd:Radar_wn-product_1x1km_ger dwd:Satellite_meteosat_1km_euat_rgb_day_hrv_and_night_ir108_3h; do
-            f=$(echo $L | tr ':' '_')
-            curl -s -o $f.png -w "$L %{http_code} %{size_download} %{time_total}\n" "$W?service=WMS&version=1.1.1&request=GetMap&layers=$L&styles=&format=image/png&transparent=true&srs=EPSG:4326&bbox=$BB&width=600&height=500" >> getmap.txt
-          done
-          curl -s -o rv_future.png -w "future %{http_code} %{size_download} %{content_type}\n" "$W?service=WMS&version=1.1.1&request=GetMap&layers=dwd:Niederschlagsradar&styles=&format=image/png&transparent=true&srs=EPSG:4326&bbox=$BB&width=600&height=500&time=$(date -u -d '+60 min' +%Y-%m-%dT%H:%M:00.000Z | sed 's/:[0-9]:/:/' )" >> getmap.txt
-          T=$(date -u -d '+62 min' +%s); T=$((T/300*300)); TS=$(date -u -d @$T +%Y-%m-%dT%H:%M:00.000Z)
-          curl -s -o rv_future2.png -w "future5 $TS %{http_code} %{size_download} %{content_type}\n" "$W?service=WMS&version=1.1.1&request=GetMap&layers=dwd:Niederschlagsradar&styles=&format=image/png&transparent=true&srs=EPSG:4326&bbox=$BB&width=600&height=500&time=$TS" >> getmap.txt
-          T=$(date -u -d '-90 min' +%s); T=$((T/300*300)); TS=$(date -u -d @$T +%Y-%m-%dT%H:%M:00.000Z)
-          curl -s -o rv_past.png -w "past $TS %{http_code} %{size_download} %{content_type}\n" "$W?service=WMS&version=1.1.1&request=GetMap&layers=dwd:Niederschlagsradar&styles=&format=image/png&transparent=true&srs=EPSG:4326&bbox=$BB&width=600&height=500&time=$TS" >> getmap.txt
-          curl -s "https://opendata.dwd.de/weather/radar/composite/" > od_composite.html
-          curl -s "https://opendata.dwd.de/weather/radar/composite/hymecng/" > od_hymec.html
-          F=$(grep -o 'href="[^"]*LATEST[^"]*"' od_hymec.html | head -1 | cut -d'"' -f2); echo "latest=$F" > hymec.txt
-          curl -s -m 60 -s -o hymec_latest "https://opendata.dwd.de/weather/radar/composite/hymecng/$F" && ls -la hymec_latest >> hymec.txt
-          curl -sI "https://opendata.dwd.de/weather/radar/composite/hymecng/" -H 'Origin: https://mucmeister.github.io' > cors_od.txt
-          curl -s -o bs_full.json -w "brightsky full %{http_code} %{size_download} %{time_total}\n" "https://api.brightsky.dev/radar?format=compressed" >> getmap.txt
-          curl -sI "https://api.brightsky.dev/radar?format=compressed" -H 'Origin: https://mucmeister.github.io' > cors_bs.txt
-          python3 -c "import json;d=json.load(open('bs_full.json'));r=d['radar'];print(len(r), r[0]['timestamp'], r[-1]['timestamp'], d.get('geometry') or d.get('bbox'), [k for k in d])" >> getmap.txt || true
-          pip -q install h5py >/dev/null 2>&1; python3 - <<'PY' >> hymec.txt 2>&1 || true
-          import h5py,glob
-          for f in glob.glob('hymec_latest'):
-              h=h5py.File(f)
-              def show(n,o):
-                  print(n, dict(o.attrs) if hasattr(o,'attrs') else '', getattr(o,'shape',''), getattr(o,'dtype',''))
-              h.visititems(show)
-              for k,v in h.attrs.items(): print('root',k,v)
-          PY
+          curl -s -m 60 -o hy "https://opendata.dwd.de/weather/radar/composite/hymecng/composite_HymecNG_LATEST_000-hd5"
+          pip -q install h5py numpy >/dev/null 2>&1
+          python3 -c "
+          import h5py,numpy as np
+          h=h5py.File('hy');l=h['dataset1/data1/legend'][:];print(l)
+          d=h['dataset1/data1/data'][:];v,c=np.unique(d,return_counts=True);print(dict(zip(v.tolist(),c.tolist())))
+          print(dict(h['dataset1/data1/what'].attrs))" > hymec2.txt 2>&1
       - run: |
           cd out && rm -f bs_full.json cap.xml && git init -q -b probe && git add -A
           git -c user.name=bot -c user.email=bot@users.noreply.github.com commit -qm probe
