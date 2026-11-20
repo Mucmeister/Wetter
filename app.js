@@ -32,7 +32,7 @@ const BUCKETS = [{k:'d1', off:1, from:0, to:1, label:'0–1'}, {k:'d2', off:2, f
 const bucketFor = d => BUCKETS.find(b => d >= b.from && d <= b.to);
 
 const DEMO = location.hash === '#demo';
-const BUILD = '2026-11-20.5';   // bei jeder Änderung erhöhen (gleich wie version.txt)
+const BUILD = '2026-11-20.6';   // bei jeder Änderung erhöhen (gleich wie version.txt)
 // Neue Version automatisch laden, sobald die App wieder geöffnet wird
 async function checkUpdate(){
   try{ const v = (await fetch('version.txt?' + Date.now(), {cache:'no-store'}).then(r => r.ok ? r.text() : '')).trim();
@@ -747,7 +747,6 @@ function render(place, R){
       <button class="expand" id="mapToggle" aria-label="Karte vergrößern"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/></svg></button></div>
     <div class="mapbar">
       <button class="chip on" data-l="radar">Radar</button>
-      <button class="chip" data-l="nowcast">+2 h Prognose</button>
       <button class="chip" data-l="warn">DWD-Warnungen</button>
       <span style="margin-left:auto">Radar: DWD (nur Deutschland) · Karte © <a href="https://www.openstreetmap.org/copyright" style="color:inherit">OpenStreetMap</a></span>
     </div>
@@ -1004,43 +1003,52 @@ const svgRadar = () => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColo
 const svgScale = () => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v18M5 7h14M5 7l-3 7h6zM19 7l-3 7h6z"/></svg>`;
 
 /* ================= Karte (DWD-WMS) ================= */
-let map;
+// Die Karte wird nur einmal pro Ort erzeugt und beim Neuzeichnen der Seite weiterverwendet,
+// damit Kacheln nicht neu geladen werden müssen.
+let map = null, mapEl = null, mapKey = null, mapLayers = null;
 function initMap(place){
-  if(typeof L === 'undefined') { $('#map').innerHTML = '<div class="loading" style="padding:120px 0">Karte nicht verfügbar</div>'; return; }
-  if(map){ map.remove(); map = null; }
+  const holder = $('#map'); if(!holder) return;
+  if(typeof L === 'undefined') { holder.innerHTML = '<div class="loading" style="padding:120px 0">Karte nicht verfügbar</div>'; return; }
+  const key = place.lat + ',' + place.lon;
   document.body.classList.remove('mapopen');
-  // In der Seite ist die Karte fest (sonst blockiert sie das Scrollen); per Tipp öffnet sie im Vollbild.
-  map = L.map('map', {zoomControl:false, attributionControl:false, dragging:false, touchZoom:false, doubleClickZoom:false,
-    scrollWheelZoom:false, boxZoom:false, keyboard:false, tap:false}).setView([place.lat, place.lon], 7);
-  const card = document.querySelector('.mapcard'), tog = $('#mapToggle');
-  const setFull = full => {
-    card.classList.toggle('full', full); document.body.classList.toggle('mapopen', full);
-    ['dragging','touchZoom','doubleClickZoom'].forEach(h => full ? map[h].enable() : map[h].disable());
-    tog.innerHTML = full ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>'
-                         : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/></svg>';
-    setTimeout(() => { map.invalidateSize(); if(!full) map.setView([place.lat, place.lon], 7); }, 60);
-  };
-  tog.onclick = e => { e.stopPropagation(); setFull(!card.classList.contains('full')); };
-  $('#map').addEventListener('click', () => { if(!card.classList.contains('full')) setFull(true); });
-  const dark = true;
-  // Grundkarte: OpenStreetMap (frei, ohne Schlüssel), per Filter dunkel eingefärbt
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:12, className:'basemap'}).addTo(map);
-  const wms = (layers, op) => L.tileLayer.wms('https://maps.dwd.de/geoserver/dwd/wms', {layers, format:'image/png', transparent:true, opacity:op, version:'1.3.0'});
-  const L1 = {radar: wms('dwd:Niederschlagsradar', .75), nowcast: wms('dwd:Radar_wn-product_1x1km_ger', .75), warn: wms('dwd:Warnungen_Gemeinden', .55)};
-  L1.radar.addTo(map);
-  L.circleMarker([place.lat, place.lon], {radius:6, color:'#fff', weight:2, fillColor:'#2b7cff', fillOpacity:1}).addTo(map);
-  let nowTimer = null;
-  document.querySelectorAll('.mapbar .chip').forEach(btn => btn.onclick = () => {
-    const k = btn.dataset.l, on = !btn.classList.contains('on');
-    btn.classList.toggle('on', on);
-    if(k==='nowcast'){
-      // Nowcast: Radar durch Prognose-Layer mit Zeit +2 h ersetzen
-      if(on){ map.removeLayer(L1.radar); document.querySelector('[data-l=radar]').classList.remove('on');
-        const t = new Date(Math.floor(Date.now()/300e3)*300e3 + 120*60e3).toISOString().slice(0,19)+'.000Z';
-        L1.nowcast.setParams({time:t}); L1.nowcast.addTo(map); }
-      else map.removeLayer(L1.nowcast);
-    } else if(on) L1[k].addTo(map); else map.removeLayer(L1[k]);
+  if(map && mapKey === key && mapEl){
+    holder.replaceWith(mapEl);                       // bestehende Karte samt geladenen Kacheln wieder einsetzen
+    setTimeout(() => map.invalidateSize(), 30);
+  } else {
+    if(map){ map.remove(); map = null; }
+    // In der Seite ist die Karte fest (sonst blockiert sie das Scrollen); per Tipp öffnet sie im Vollbild.
+    map = L.map(holder, {zoomControl:false, attributionControl:false, dragging:false, touchZoom:false, doubleClickZoom:false,
+      scrollWheelZoom:false, boxZoom:false, keyboard:false, tap:false, keepBuffer:4}).setView([place.lat, place.lon], 7);
+    mapEl = holder; mapKey = key;
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:12, className:'basemap', keepBuffer:4}).addTo(map);
+    const wms = (layers, op) => L.tileLayer.wms('https://maps.dwd.de/geoserver/dwd/wms', {layers, format:'image/png', transparent:true, opacity:op, version:'1.3.0', keepBuffer:4});
+    mapLayers = {radar: wms('dwd:Niederschlagsradar', .75).addTo(map), warn: null};
+    L.circleMarker([place.lat, place.lon], {radius:6, color:'#fff', weight:2, fillColor:'#2b7cff', fillOpacity:1}).addTo(map);
+    mapEl.addEventListener('click', () => { const c = document.querySelector('.mapcard'); if(c && !c.classList.contains('full')) setMapFull(true); });
+  }
+  // Ebenen-Schalter: nur ein-/ausblenden (sofort), nichts neu laden
+  document.querySelectorAll('.mapbar .chip').forEach(btn => {
+    const k = btn.dataset.l;
+    const isOn = k === 'radar' ? mapLayers.radar.options.opacity > 0 : !!(mapLayers.warn && mapLayers.warn.options.opacity > 0);
+    btn.classList.toggle('on', isOn);
+    btn.onclick = () => {
+      const on = !btn.classList.contains('on'); btn.classList.toggle('on', on);
+      if(k === 'radar') mapLayers.radar.setOpacity(on ? .75 : 0);
+      if(k === 'warn'){
+        if(!mapLayers.warn) mapLayers.warn = L.tileLayer.wms('https://maps.dwd.de/geoserver/dwd/wms', {layers:'dwd:Warnungen_Gemeinden', format:'image/png', transparent:true, opacity:.55, version:'1.3.0'}).addTo(map);
+        else mapLayers.warn.setOpacity(on ? .55 : 0);
+      }
+    };
   });
+  $('#mapToggle').onclick = e => { e.stopPropagation(); setMapFull(!document.querySelector('.mapcard').classList.contains('full')); };
+}
+function setMapFull(full){
+  const card = document.querySelector('.mapcard'), tog = $('#mapToggle'); if(!card || !map) return;
+  card.classList.toggle('full', full); document.body.classList.toggle('mapopen', full);
+  ['dragging','touchZoom','doubleClickZoom'].forEach(h => full ? map[h].enable() : map[h].disable());
+  tog.innerHTML = full ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>'
+                       : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/></svg>';
+  setTimeout(() => { map.invalidateSize(); if(!full){ const [la, lo] = mapKey.split(',').map(Number); map.setView([la, lo], 7); } }, 60);
 }
 
 /* ================= Orte ================= */
