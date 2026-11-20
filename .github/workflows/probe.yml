@@ -1,0 +1,51 @@
+name: Datenquellen-Test
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          mkdir out && cd out
+          W='https://maps.dwd.de/geoserver/dwd/wms'
+          curl -s "$W?service=WMS&version=1.3.0&request=GetCapabilities" -o cap.xml
+          python3 - <<'PY'
+          import re
+          s=open('cap.xml').read()
+          out=open('layers.txt','w')
+          for m in re.finditer(r'<Layer[^>]*>\s*<Name>([^<]+)</Name>\s*<Title>([^<]*)</Title>(.*?)</Layer>', s, re.S):
+              n,t,body=m.groups()
+              if re.search(r'(?i)radar|sat|nieder|hg|hymec|schnee|snow|wn|rv|blitz|light', n+t):
+                  dims=re.findall(r'<Dimension[^>]*name="([^"]+)"[^>]*default="([^"]*)"[^>]*>([^<]{0,300})', body)
+                  st=re.findall(r'<Style>\s*<Name>([^<]+)</Name>', body)
+                  out.write(f"{n} | {t} | styles={st} | dims={dims}\n")
+          PY
+          curl -sI "$W?service=WMS&version=1.3.0&request=GetCapabilities" -H 'Origin: https://mucmeister.github.io' > cors_wms.txt
+          BB='5.5,47,15.5,55.2'
+          for L in dwd:Niederschlagsradar dwd:Radar_wn-product_1x1km_ger dwd:Satellite_meteosat_1km_euat_rgb_day_hrv_and_night_ir108_3h; do
+            f=$(echo $L | tr ':' '_')
+            curl -s -o $f.png -w "$L %{http_code} %{size_download} %{time_total}\n" "$W?service=WMS&version=1.1.1&request=GetMap&layers=$L&styles=&format=image/png&transparent=true&srs=EPSG:4326&bbox=$BB&width=600&height=500" >> getmap.txt
+          done
+          curl -s -o rv_future.png -w "future %{http_code} %{size_download} %{content_type}\n" "$W?service=WMS&version=1.1.1&request=GetMap&layers=dwd:Niederschlagsradar&styles=&format=image/png&transparent=true&srs=EPSG:4326&bbox=$BB&width=600&height=500&time=$(date -u -d '+60 min' +%Y-%m-%dT%H:%M:00.000Z | sed 's/:[0-9]:/:/' )" >> getmap.txt
+          T=$(date -u -d '+62 min' +%s); T=$((T/300*300)); TS=$(date -u -d @$T +%Y-%m-%dT%H:%M:00.000Z)
+          curl -s -o rv_future2.png -w "future5 $TS %{http_code} %{size_download} %{content_type}\n" "$W?service=WMS&version=1.1.1&request=GetMap&layers=dwd:Niederschlagsradar&styles=&format=image/png&transparent=true&srs=EPSG:4326&bbox=$BB&width=600&height=500&time=$TS" >> getmap.txt
+          T=$(date -u -d '-90 min' +%s); T=$((T/300*300)); TS=$(date -u -d @$T +%Y-%m-%dT%H:%M:00.000Z)
+          curl -s -o rv_past.png -w "past $TS %{http_code} %{size_download} %{content_type}\n" "$W?service=WMS&version=1.1.1&request=GetMap&layers=dwd:Niederschlagsradar&styles=&format=image/png&transparent=true&srs=EPSG:4326&bbox=$BB&width=600&height=500&time=$TS" >> getmap.txt
+          curl -s "https://opendata.dwd.de/weather/radar/composite/" > od_composite.html
+          curl -s "https://opendata.dwd.de/weather/radar/composite/hymecng/" > od_hymec.html
+          F=$(grep -o 'href="[^"]*LATEST[^"]*"' od_hymec.html | head -1 | cut -d'"' -f2); echo "latest=$F" > hymec.txt
+          [ -n "$F" ] && curl -s -o hymec_latest "https://opendata.dwd.de/weather/radar/composite/hymecng/$F" && ls -la hymec_latest >> hymec.txt
+          curl -sI "https://opendata.dwd.de/weather/radar/composite/hymecng/" -H 'Origin: https://mucmeister.github.io' > cors_od.txt
+          curl -s -o bs_full.json -w "brightsky full %{http_code} %{size_download} %{time_total}\n" "https://api.brightsky.dev/radar?format=compressed" >> getmap.txt
+          curl -sI "https://api.brightsky.dev/radar?format=compressed" -H 'Origin: https://mucmeister.github.io' > cors_bs.txt
+          python3 -c "import json;d=json.load(open('bs_full.json'));r=d['radar'];print(len(r), r[0]['timestamp'], r[-1]['timestamp'], d.get('geometry') or d.get('bbox'), [k for k in d])" >> getmap.txt || true
+          pip -q install h5py >/dev/null 2>&1; python3 - <<'PY' >> hymec.txt 2>&1 || true
+          import h5py,glob
+          for f in glob.glob('hymec_latest'):
+              h=h5py.File(f)
+              def show(n,o):
+                  print(n, dict(o.attrs) if hasattr(o,'attrs') else '', getattr(o,'shape',''), getattr(o,'dtype',''))
+              h.visititems(show)
+              for k,v in h.attrs.items(): print('root',k,v)
+          PY
+      - uses: actions/upload-artifact@v4
+        with: {name: probe, path: out}
