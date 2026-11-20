@@ -32,7 +32,7 @@ const BUCKETS = [{k:'d1', off:1, from:0, to:1, label:'0–1'}, {k:'d2', off:2, f
 const bucketFor = d => BUCKETS.find(b => d >= b.from && d <= b.to);
 
 const DEMO = location.hash === '#demo';
-const BUILD = '2026-11-20.6';   // bei jeder Änderung erhöhen (gleich wie version.txt)
+const BUILD = '2026-11-20.7';   // bei jeder Änderung erhöhen (gleich wie version.txt)
 // Neue Version automatisch laden, sobald die App wieder geöffnet wird
 async function checkUpdate(){
   try{ const v = (await fetch('version.txt?' + Date.now(), {cache:'no-store'}).then(r => r.ok ? r.text() : '')).trim();
@@ -208,12 +208,13 @@ function prepPrev(prev, obsInfo, offH){
   const past = time.map(t => t.slice(0,13) < nowKey);
   return {time, per, obsT, obsP, lh, lday, past, n};
 }
-function statsWindow(D, i0, i1, withBias){
+function statsWindow(D, i0, i1, withBias, only){
   const S = {};
   for(const m of MODELS){
     const P = D.per[m.id]; if(!P) continue;
     S[m.id] = {};
     for(const b of BUCKETS){
+      if(only && !only.includes(b.k)) continue;
       const F = P[`temperature_2m_previous_day${b.off}`], R = P[`precipitation_previous_day${b.off}`];
       if(!F) continue;
       const sum = new Array(BINS).fill(0), cnt = new Array(BINS).fill(0); let absRaw = 0, n = 0;
@@ -289,9 +290,12 @@ async function computeAllStats(lat, lon, offSec){
     for(let i=1;i<D.n;i++) if(D.lh[i] === 0 && D.past[i] && i+23 < D.n && D.past[i+23]) dayStarts.push(i);
     const use = dayStarts.slice(-TRACK_DAYS), acc = {ours:[0,0], avg:[0,0]}, per = {};
     let days = 0; const rain = {days:0, ours:0, avg:0, per:{}};
+    const yieldUI = () => new Promise(r => setTimeout(r, 0));   // Rechnung stückeln, damit Scrollen/Tippen flüssig bleibt
+    await yieldUI();
     for(const s0 of use){
       if(s0 < 20*24) continue;
-      const Sw = statsWindow(D, Math.max(0, s0 - WINDOW_DAYS*24), s0, true), Ww = weightsFrom(Sw, hilly).d1;
+      if(dayStarts.indexOf(s0) % 3 === 0) await yieldUI();
+      const Sw = statsWindow(D, Math.max(0, s0 - WINDOW_DAYS*24), s0, true, ['d1']), Ww = weightsFrom(Sw, hilly).d1;
       let used = 0;
       for(let i=s0;i<s0+24;i++){
         const o = D.obsT[i]; if(o==null) continue;
@@ -325,6 +329,7 @@ async function computeAllStats(lat, lon, offSec){
       // Bilanz für längere Vorlaufzeiten (3 und 5 Tage), gleiche Methode: Korrektur + Gewichte nur aus der Zeit davor
       track.leads = [{lead: 1, ours: track.ours, avg: track.avg}];
       for(const L of [3, 5]){
+        await yieldUI();
         const key = `temperature_2m_previous_day${L}`, ok = MODELS.filter(m => D.per[m.id]?.[key]);
         let so = 0, sa = 0, nn = 0;
         for(const s0 of use){
@@ -533,7 +538,7 @@ function build(data){
     const pEarly = i0>=0 ? sumP(i0+1, iS) : null;          // 0–8 Uhr
     const pLate  = sumP(iE+1, (i0>=0?i0:iS-WIN_START)+24); // 20–24 Uhr
     const fullT = full.map(h=>h.temp).filter(v=>v!=null);
-    const fullDay = {hours: full, tmin: Math.min(...fullT), tmax: Math.max(...fullT), pEarly, pLate};
+    const fullDay = {hours: full, tmin: fullT.length ? Math.min(...fullT) : tmin, tmax: fullT.length ? Math.max(...fullT) : tmax, pEarly, pLate};
     const nightP = (pEarly||0) + (pLate||0);
     // Modellstreuung + Einzelwerte
     const lead = Math.max(0, Math.floor((iS - nowIdx)/24));
@@ -611,7 +616,7 @@ function nowcast(radar, offSec){
   };
 }
 
-const umlaut = n => String(n||'').replace(/Ae/g,'Ä').replace(/Oe/g,'Ö').replace(/Ue/g,'Ü').replace(/ae/g,'ä').replace(/oe/g,'ö').replace(/(?<!q)ue/g,'ü');
+const umlaut = n => String(n||'').replace(/Ae/g,'Ä').replace(/Oe/g,'Ö').replace(/Ue/g,'Ü').replace(/ae/g,'ä').replace(/oe/g,'ö').replace(/(^|[^qQ])ue/g, (m, c) => c + 'ü');   // ohne Lookbehind: ältere iPhones (iOS < 16.4) kennen den nicht
 
 /* ================= Wetterzustand + Icons ================= */
 function condition({cloud, psum, pprob, thunder, fog, temp, isDay, hourly}){
@@ -661,6 +666,7 @@ let state = {place:null, res:null, mapLayers:null};
 
 function render(place, R){
   $('#btnLoc').style.opacity = 1;
+  if(!R.days.length || !R.cur){ $('#app').innerHTML = `<div class="hero"><div class="place">${esc(place.name)}</div></div><div class="err">Für diesen Ort liegen gerade keine vollständigen Vorhersagedaten vor. Zum erneuten Versuch nach unten ziehen.</div>`; return; }
   const c = R.cur, today = R.days[0];
   const hc = hourCond(c);
   // Hintergrund
@@ -700,7 +706,7 @@ function render(place, R){
                 : d.nightP!=null && d.nightP>=1 && d.pprob < 0.3 && d.psum < 0.5 ? `<div class="nightrain">Regen nachts</div>` : '';
     return `<div class="row" data-i="${i}"><div class="d">${dayName(d.d,i)}${night}</div>${icon(d.cond.k)}<div class="pp">${pp}</div>
       <div class="mn">${r0(d.tmin)}°</div><div class="bar"><i style="left:${l}%;width:${Math.max(w,3)}%;background:${grad}"></i>${dot}</div><div class="mx">${r0(d.tmax)}°</div></div>
-      <div class="detail" id="det${i}">${dayDetail(d, i)}</div>`;
+      <div class="detail" id="det${i}"></div>`;
   }).join('');
 
   // Kacheln
@@ -778,7 +784,7 @@ function render(place, R){
   <div style="margin-top:6px;line-height:1.5">Diese Seite hat keinen eigenen Server und speichert nichts über dich. Favoriten und zuletzt gesuchte Orte bleiben nur auf deinem Gerät. Für die Wetterdaten fragt dein Gerät direkt bei Open-Meteo, Bright Sky (Daten des Deutschen Wetterdienstes), dem DWD-Kartendienst und OpenStreetMap an; nur wenn du „Standort“ antippst, auch bei BigDataCloud für den Ortsnamen. Diese Dienste sehen dabei deine IP-Adresse und den gesuchten Ort, auf etwa 1 km gerundet. Gehostet bei GitHub Pages.</div></details>
   Stand: ${R.meta.generated_at_local || R.now.replace('T',' ')} · Modelllauf-Abruf ${new Date(state.fetched||Date.now()).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'})}</div>`;
 
-  document.querySelectorAll('.days .row').forEach(r => r.onclick = () => $('#det'+r.dataset.i).classList.toggle('open'));
+  document.querySelectorAll('.days .row').forEach(r => r.onclick = () => toggleDetail(+r.dataset.i));
   document.querySelectorAll('.warn').forEach(w => w.onclick = () => w.classList.toggle('open'));
   $('#howToggle').onclick = $('.models .teaser').onclick = () => $('.models').classList.toggle('open');
   $('#star').onclick = () => { toggleFav(place); render(place, R); };
@@ -786,6 +792,12 @@ function render(place, R){
   try{ initMap(place); }catch(e){ const m = $('#map'); if(m) m.innerHTML = '<div class="loading" style="padding:120px 0">Karte gerade nicht verfügbar</div>'; }
 }
 
+// Tagesdetail: Inhalt wird beim ersten Öffnen erzeugt
+function toggleDetail(i, forceOpen){
+  const el = document.getElementById('det' + i); if(!el || !state.res || !state.res.days[i]) return;
+  if(!el.innerHTML) el.innerHTML = dayDetail(state.res.days[i], i);
+  el.classList.toggle('open', forceOpen === true ? true : !el.classList.contains('open'));
+}
 function dayDetail(d, i){
   const F = d.fullDay;
   const hrs = F.hours.map(h => {
@@ -1014,6 +1026,8 @@ function initMap(place){
   if(map && mapKey === key && mapEl){
     holder.replaceWith(mapEl);                       // bestehende Karte samt geladenen Kacheln wieder einsetzen
     setTimeout(() => map.invalidateSize(), 30);
+    const stamp = Math.floor(Date.now()/300e3);      // neues Radarbild höchstens alle 5 Minuten holen
+    if(mapLayers.radarStamp !== stamp){ mapLayers.radarStamp = stamp; mapLayers.radar.setParams({_t: stamp}); }
   } else {
     if(map){ map.remove(); map = null; }
     // In der Seite ist die Karte fest (sonst blockiert sie das Scrollen); per Tipp öffnet sie im Vollbild.
@@ -1022,7 +1036,7 @@ function initMap(place){
     mapEl = holder; mapKey = key;
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:12, className:'basemap', keepBuffer:4}).addTo(map);
     const wms = (layers, op) => L.tileLayer.wms('https://maps.dwd.de/geoserver/dwd/wms', {layers, format:'image/png', transparent:true, opacity:op, version:'1.3.0', keepBuffer:4});
-    mapLayers = {radar: wms('dwd:Niederschlagsradar', .75).addTo(map), warn: null};
+    mapLayers = {radar: wms('dwd:Niederschlagsradar', .75).addTo(map), warn: null, radarStamp: Math.floor(Date.now()/300e3)};
     L.circleMarker([place.lat, place.lon], {radius:6, color:'#fff', weight:2, fillColor:'#2b7cff', fillOpacity:1}).addTo(map);
     mapEl.addEventListener('click', () => { const c = document.querySelector('.mapcard'); if(c && !c.classList.contains('full')) setMapFull(true); });
   }
@@ -1079,7 +1093,7 @@ async function load(force){
       if(my !== loadSeq || document.body.classList.contains('mapopen')) { cur = {...cur, ...add}; return; }
       const y = window.scrollY, open = [...document.querySelectorAll('.detail.open')].map(x => x.id), mo = document.querySelector('.models.open');
       cur = {...cur, ...add}; show(cur);
-      open.forEach(id => { const x = document.getElementById(id); if(x) x.classList.add('open'); });
+      open.forEach(id => toggleDetail(+id.slice(3), true));
       if(mo) document.querySelector('.models')?.classList.add('open');
       window.scrollTo(0, y);
     };
@@ -1136,18 +1150,20 @@ function choose(p){
   $('#sheet').classList.remove('open'); $('#q').value = '';
   setPlace(p);
 }
-let qT;
+let qT, qSeq = 0;
 $('#q').oninput = () => {
   clearTimeout(qT);
   const q = $('#q').value.trim();
   if(q.length < 2){ showRecent(); return; }
   qT = setTimeout(async () => {
+    const mySeq = ++qSeq;
     try{
-      const r = await getJSON(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=8&language=de&format=json`);
+      const r = await getJSON(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=8&language=de&format=json`, 8000);
+      if(mySeq !== qSeq) return;
       const list = (r.results||[]).map(x => ({name:x.name, lat:x.latitude, lon:x.longitude, region:[x.admin1, x.country].filter(Boolean).join(', ')}));
       $('#results').innerHTML = list.length ? list.map((p,i)=>`<div data-i="${i}">${esc(p.name)}<small>${esc(p.region)}</small></div>`).join('') : '<div>Kein Ort gefunden</div>';
       $('#results').querySelectorAll('[data-i]').forEach(el => el.onclick = () => choose(list[+el.dataset.i]));
-    }catch(e){ $('#results').innerHTML = '<div>Suche nicht erreichbar</div>'; }
+    }catch(e){ if(mySeq === qSeq) $('#results').innerHTML = '<div>Suche nicht erreichbar – bitte erneut versuchen</div>'; }
   }, 280);
 };
 $('#btnLoc').onclick = () => {
@@ -1174,6 +1190,11 @@ document.addEventListener('visibilitychange', () => {
   else { const u = document.querySelector('.updated'); if(u) u.textContent = updatedTxt(); }
 });
 window.addEventListener('online', () => { if(state.stale) load(true); });
+setInterval(() => {
+  if(document.hidden || !state.fetched) return;
+  if(Date.now() - state.dataTime > CACHE_MIN*60e3 && !loading) load();
+  else { const u = document.querySelector('.updated'); if(u) u.textContent = updatedTxt(); }
+}, 60e3);
 
 /* ================= Offline-Fähigkeit (Service Worker) ================= */
 if('serviceWorker' in navigator && location.protocol === 'https:'){
