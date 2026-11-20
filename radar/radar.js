@@ -1,6 +1,6 @@
 'use strict';
 /* Regenradar – eigenständige Seite. Radar: DWD (Bright Sky), Niederschlagsart: DWD HymecNG, Satellit: EUMETSAT. */
-const BUILD = '2026-11-20.r1';
+const BUILD = '2026-11-20.r2';
 const $ = s => document.querySelector(s);
 const STEP = 15*60e3, SPAN = 8;                     // 15-Minuten-Schritte, 2 Std. zurück und 2 Std. voraus
 const store = {
@@ -81,7 +81,7 @@ function setupTimes(){
   const now = Date.now();
   t0 = Math.floor((now - 5*60e3)/STEP)*STEP;      // jüngstes sicher verfügbares Radarbild (15-Min-Raster)
   // genauer: das letzte 5-Minuten-Bild, das schon da sein sollte
-  const latest = Math.floor((now - 3*60e3)/300e3)*300e3;
+  const latest = Math.floor((now - 7*60e3)/300e3)*300e3;   // DWD-Bilder kommen nach gut 5 Minuten
   times = [];
   for(let k = -SPAN; k <= SPAN; k++) times.push(t0 + k*STEP);
   if(latest > t0) times.splice(SPAN + 1, 0, latest);   // aktuellstes Bild zusätzlich
