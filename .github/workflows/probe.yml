@@ -1,5 +1,7 @@
 name: Datenquellen-Test
 on: workflow_dispatch
+permissions:
+  contents: write
 jobs:
   probe:
     runs-on: ubuntu-latest
@@ -47,5 +49,7 @@ jobs:
               h.visititems(show)
               for k,v in h.attrs.items(): print('root',k,v)
           PY
-      - uses: actions/upload-artifact@v4
-        with: {name: probe, path: out}
+      - run: |
+          cd out && rm -f bs_full.json cap.xml && git init -q -b probe && git add -A
+          git -c user.name=bot -c user.email=bot@users.noreply.github.com commit -qm probe
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" probe
