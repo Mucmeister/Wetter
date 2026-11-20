@@ -32,7 +32,7 @@ const BUCKETS = [{k:'d1', off:1, from:0, to:1, label:'0–1'}, {k:'d2', off:2, f
 const bucketFor = d => BUCKETS.find(b => d >= b.from && d <= b.to);
 
 const DEMO = location.hash === '#demo';
-const BUILD = '2026-11-20.3';   // bei jeder Änderung erhöhen (gleich wie version.txt)
+const BUILD = '2026-11-20.4';   // bei jeder Änderung erhöhen (gleich wie version.txt)
 // Neue Version automatisch laden, sobald die App wieder geöffnet wird
 async function checkUpdate(){
   try{ const v = (await fetch('version.txt?' + Date.now(), {cache:'no-store'}).then(r => r.ok ? r.text() : '')).trim();
@@ -114,20 +114,23 @@ function urls(lat, lon){
 // DWD-Radar am Ort (Bright Sky): letzte 30 Min. gemessen + 2 Std. Radar-Vorhersage, 5-Minuten-Schritte
 function loadRadar(lat, lon){
   const from = new Date(Date.now() - 35*60e3).toISOString().slice(0,16), to = new Date(Date.now() + 125*60e3).toISOString().slice(0,16);
-  return getJSON(`https://api.brightsky.dev/radar?lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}&distance=2000&format=plain&date=${from}&last_date=${to}&tz=Etc/UTC`)
+  return getJSON(`https://api.brightsky.dev/radar?lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}&distance=2000&format=plain&date=${from}&last_date=${to}&tz=Etc/UTC`, 6000)
     .then(j => j && j.radar && j.radar.length ? j : null).catch(() => null);
 }
 
 async function loadAll(lat, lon, force){
   const nearLMU = km(lat, lon, LMU.lat, LMU.lon) <= LMU.radiusKm;
   const lmuNow = (DEMO || !nearLMU) ? Promise.resolve(null)
-    : getJSON('https://raw.githubusercontent.com/Mucmeister/wetter/live/now.json?t=' + Math.floor(Date.now()/6e4)).catch(() => null);
+    : getJSON('https://raw.githubusercontent.com/Mucmeister/wetter/live/now.json?t=' + Math.floor(Date.now()/6e4), 6000).catch(() => null);
   const live = DEMO ? [null,null,null] : [loadRadar(lat, lon),
-    getJSON(`https://api.brightsky.dev/alerts?lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}`).catch(() => null),
-    getJSON(`https://api.brightsky.dev/current_weather?lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}&max_dist=20000`).catch(() => null)];
+    getJSON(`https://api.brightsky.dev/alerts?lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}`, 6000).catch(() => null),
+    getJSON(`https://api.brightsky.dev/current_weather?lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}&max_dist=20000`, 6000).catch(() => null)];
   const d0 = await loadAll2(lat, lon, force);
-  const [radar, alerts, current] = await Promise.all(live);
-  return {...d0, radar, alerts, current, lmuNow: await lmuNow};
+  // Live-Daten (Radar, Warnungen, Messwert): höchstens 2,5 s warten, sonst später nachreichen
+  const liveAll = Promise.all([...live, lmuNow]).then(([radar, alerts, current, lmu]) => ({radar, alerts, current, lmuNow: lmu}));
+  const quick = await Promise.race([liveAll, new Promise(r => setTimeout(() => r(null), 2500))]);
+  if(quick) return {...d0, ...quick};
+  return {...d0, radar:null, alerts:null, current:null, lmuNow:null, liveP: liveAll};
 }
 async function loadAll2(lat, lon, force){
   const key = `wx:${lat.toFixed(2)},${lon.toFixed(2)}`, skey = `wxs:${lat.toFixed(2)},${lon.toFixed(2)}`;
@@ -156,7 +159,7 @@ async function loadAll2(lat, lon, force){
   }
   try{
     Object.keys(localStorage).filter(k => /^wxs?:\d/.test(k) && k!==key && k!==skey)
-      .map(k => ({k, t:(store.get(k)||{}).t||0})).sort((a,b)=>b.t-a.t).slice(4).forEach(x => localStorage.removeItem(x.k));
+      .map(k => ({k, t:(store.get(k)||{}).t||0})).sort((a,b)=>b.t-a.t).slice(2).forEach(x => localStorage.removeItem(x.k));   // Speicher schonen (iPhone: ca. 5 MB)
   }catch(e){}
   store.set(key, {t:Date.now(), d});
   return {...d, stats:S, statsP};
@@ -501,6 +504,7 @@ function build(data){
     if(iS<0 || iE<0) return null;
     const win = hourly.slice(iS, iE+1);             // Momentanwerte 8:00–20:00
     const acc = hourly.slice(iS+1, iE+1);           // Niederschlag 8–20 (Stundensummen bis 9..20 Uhr)
+    if(!win.some(h => h.temp != null)) return null;
     const tmax = Math.max(...win.map(h=>h.temp).filter(v=>v!=null));
     const tmin = Math.min(...win.map(h=>h.temp).filter(v=>v!=null));
     const psum = acc.reduce((s,h)=>s+(h.prcp||0),0);
@@ -764,7 +768,7 @@ function render(place, R){
   $('#howToggle').onclick = $('.models .teaser').onclick = () => $('.models').classList.toggle('open');
   $('#star').onclick = () => { toggleFav(place); render(place, R); };
   swipeFavs();
-  initMap(place);
+  try{ initMap(place); }catch(e){ const m = $('#map'); if(m) m.innerHTML = '<div class="loading" style="padding:120px 0">Karte gerade nicht verfügbar</div>'; }
 }
 
 function dayDetail(d, i){
@@ -1038,14 +1042,24 @@ async function load(force){
     const show = d => {
       state.warn = '';
       if(state.stale) state.warn = 'Keine Verbindung – du siehst den Stand von ' + hhmm(state.dataTime) + '. Zum Aktualisieren nach unten ziehen.';
-      else if(d.errs && d.errs.length) state.warn = 'Teilweise ohne Daten: ' + esc(d.errs.join(' · ')) + ' – Vorhersage läuft mit den übrigen Quellen.';
+      else if(d.errs && d.errs.length) state.warn = 'Die Ensemble-Läufe sind gerade nicht erreichbar. Die Vorhersage läuft, nur Regenwahrscheinlichkeit und Spannen sind ungenauer.';
       const R = build(d); state.res = R; render(p, R);
     };
     show(data); ptrDone();
-    if(data.statsP){
-      const N = await data.statsP;
-      if(N && my === loadSeq){ const y = window.scrollY; show({...data, stats: N}); window.scrollTo(0, y); }
-    }
+    // Nachzügler (Live-Daten, Prüfdaten) still einarbeiten; offene Ansichten und Scrollposition bleiben
+    let cur = data;
+    const patch = add => {
+      if(my !== loadSeq || document.body.classList.contains('mapopen')) { cur = {...cur, ...add}; return; }
+      const y = window.scrollY, open = [...document.querySelectorAll('.detail.open')].map(x => x.id), mo = document.querySelector('.models.open');
+      cur = {...cur, ...add}; show(cur);
+      open.forEach(id => { const x = document.getElementById(id); if(x) x.classList.add('open'); });
+      if(mo) document.querySelector('.models')?.classList.add('open');
+      window.scrollTo(0, y);
+    };
+    await Promise.all([
+      data.liveP ? data.liveP.then(L => patch(L)).catch(() => {}) : null,
+      data.statsP ? data.statsP.then(N => { if(N) patch({stats: N}); }).catch(() => {}) : null,
+    ]);
   }catch(e){
     if(my === loadSeq) $('#app').innerHTML = `<div class="hero"><div class="place">${esc(p.name)}</div></div><div class="err">Daten konnten nicht geladen werden: ${esc(e.message||e)}<br>Zum erneuten Versuch nach unten ziehen.</div>`;
   }finally{ if(my === loadSeq){ loading = false; ptrDone(); } }
