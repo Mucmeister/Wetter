@@ -1,0 +1,36 @@
+name: Niederschlagsart Radar
+# Holt alle 5 Minuten die DWD-Niederschlagsart (Regen/Schnee/…) und legt sie im Zweig "radar" ab.
+# GitHub startet Zeitpläne nur etwa stündlich zuverlässig, deshalb läuft jeder Start knapp eine Stunde.
+on:
+  schedule:
+    - cron: '2 * * * *'
+  workflow_dispatch:
+  push:
+    paths: ['tools/hg.py', '.github/workflows/radar.yml']
+permissions:
+  contents: write
+concurrency:
+  group: radar
+  cancel-in-progress: false
+jobs:
+  hg:
+    runs-on: ubuntu-latest
+    timeout-minutes: 62
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install -q h5py numpy scipy
+      - name: Alle 5 Minuten Niederschlagsart holen
+        run: |
+          git config --global user.name "wetter-bot"
+          git config --global user.email "wetter-bot@users.noreply.github.com"
+          set +e; mkdir -p /tmp/out
+          for i in $(seq 1 12); do
+            python3 tools/hg.py /tmp/out; rc=$?
+            if [ $rc -eq 0 ]; then
+              rm -rf /tmp/br && mkdir /tmp/br && cp /tmp/out/hg.bin /tmp/out/hg.json /tmp/br/
+              (cd /tmp/br && git init -q -b radar && git add -A && git commit -qm "Niederschlagsart" \
+                && git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" radar) || echo "Push fehlgeschlagen"
+            fi
+            if [ $i -lt 12 ]; then sleep 290; fi
+          done
+          exit 0
