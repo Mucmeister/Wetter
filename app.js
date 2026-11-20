@@ -32,7 +32,7 @@ const BUCKETS = [{k:'d1', off:1, from:0, to:1, label:'0–1'}, {k:'d2', off:2, f
 const bucketFor = d => BUCKETS.find(b => d >= b.from && d <= b.to);
 
 const DEMO = location.hash === '#demo';
-const BUILD = '2026-11-20.7';   // bei jeder Änderung erhöhen (gleich wie version.txt)
+const BUILD = '2026-11-20.8';   // bei jeder Änderung erhöhen (gleich wie version.txt)
 // Neue Version automatisch laden, sobald die App wieder geöffnet wird
 async function checkUpdate(){
   try{ const v = (await fetch('version.txt?' + Date.now(), {cache:'no-store'}).then(r => r.ok ? r.text() : '')).trim();
@@ -621,8 +621,9 @@ const umlaut = n => String(n||'').replace(/Ae/g,'Ä').replace(/Oe/g,'Ö').replac
 /* ================= Wetterzustand + Icons ================= */
 function condition({cloud, psum, pprob, thunder, fog, temp, isDay, hourly}){
   const snow = temp!=null && temp < 1;
-  const wet = hourly ? (psum >= 0.1 && pprob >= 0.35) : (pprob >= 0.5 && psum >= 1);
-  const showers = !wet && (hourly ? (psum>=0.1 && pprob>=0.25) : (pprob >= 0.3 && psum >= 0.3));
+  const pr = Math.round(pprob*10)/10;               // so wie die Prozentzahl angezeigt wird
+  const wet = hourly ? (psum >= 0.1 && pr >= 0.4) : (pr >= 0.6 && psum >= 1);
+  const showers = !wet && (hourly ? (psum >= 0.1 && pr >= 0.3) : (pr >= 0.4 && psum >= 0.2));
   if(thunder >= 0.3 && (pprob>=0.35)) return {k:'thunder', txt:'Gewitter'};
   if(wet) return snow ? {k:'snow', txt: psum>(hourly?1.5:8)? 'Starker Schneefall':'Schnee'}
                       : {k:'rain', txt: psum>(hourly?2.5:10)? 'Starker Regen' : (hourly && psum<0.5) ? 'Leichter Regen' : 'Regen'};
@@ -636,6 +637,7 @@ function condition({cloud, psum, pprob, thunder, fog, temp, isDay, hourly}){
 }
 function hourCond(h){ return condition({cloud:h.cloud, psum:h.prcp||0, pprob:h.pr||0, thunder:h.thunder, fog:h.fog, temp:h.temp, isDay:h.isDay, hourly:true}); }
 
+const DROPSYM = '<svg class="drop" viewBox="0 0 10 14" aria-hidden="true"><path d="M5 1C5 1 1 6.2 1 9a4 4 0 0 0 8 0C9 6.2 5 1 5 1z" fill="currentColor"/></svg>';
 const SUN = '#ffd23f', CLOUD='#fff', DARK='#c9d3df', DROP='#5ec2ff', MOONC='#e9eefc';
 function icon(k){
   const sun = (cx,cy,r)=>`<g stroke="${SUN}" stroke-width="2" stroke-linecap="round">${[0,45,90,135,180,225,270,315].map(a=>{const x=Math.cos(a*Math.PI/180),y=Math.sin(a*Math.PI/180);return `<line x1="${cx+x*(r+3)}" y1="${cy+y*(r+3)}" x2="${cx+x*(r+6)}" y2="${cy+y*(r+6)}"/>`}).join('')}</g><circle cx="${cx}" cy="${cy}" r="${r}" fill="${SUN}"/>`;
@@ -688,7 +690,7 @@ function render(place, R){
   const hrs = R.hourly.slice(R.nowIdx, R.nowIdx+26).map((h, j) => {
     const hh = +h.t.slice(11,13);
     const inWin = hh>=WIN_START && hh<=WIN_END;
-    const pr = h.pr!=null && h.pr>=0.2 && h.prcp>=0.05 ? Math.round(h.pr*10)*10+'%' : '';
+    const pr = h.pr!=null && h.pr>=0.2 && h.prcp>=0.05 ? DROPSYM + Math.round(h.pr*10)*10+'%' : '';
     return `<div class="hr ${inWin?'win':'out'}"><div class="t">${j===0?'Jetzt':String(hh).padStart(2,'0')}</div>
       <div class="p">${pr}</div>${icon(hourCond(h).k)}<div class="h">${r0(h.temp)}°</div></div>`;
   }).join('');
@@ -700,7 +702,7 @@ function render(place, R){
     const l = (d.tmin-gMin)/span*100, w = (d.tmax-d.tmin)/span*100;
     const grad = `linear-gradient(90deg, ${tempColor(d.tmin)}, ${tempColor(d.tmax)})`;
     const dot = i===0 && !afterWin && c.temp!=null ? `<b style="left:calc(${clamp((c.temp-gMin)/span*100,0,100)}% - 4.5px)"></b>` : '';
-    const pp = d.pprob>=0.15 ? Math.round(d.pprob*10)*10+'%' : '';
+    const pp = d.pprob>=0.15 ? DROPSYM + Math.round(d.pprob*10)*10+'%' : '';
     // „unsicher“ nur in den ersten 6 Tagen: danach ist jede Vorhersage unsicher, der Hinweis wäre nur Rauschen
     const night = d.range && i <= 5 && d.range.width >= 4.5 + 0.6*Math.max(0, i-2) ? `<div class="nightrain unsure">unsicher</div>`
                 : d.nightP!=null && d.nightP>=1 && d.pprob < 0.3 && d.psum < 0.5 ? `<div class="nightrain">Regen nachts</div>` : '';
@@ -737,6 +739,7 @@ function render(place, R){
 
   <div class="card">
     <h3>${svgCal()} 10-Tage-Vorhersage · 8–20 Uhr</h3>
+    <div class="legend">${DROPSYM} Regenwahrscheinlichkeit zwischen 8 und 20 Uhr</div>
     <div class="days">${days}</div>
   </div>
 
@@ -802,7 +805,7 @@ function dayDetail(d, i){
   const F = d.fullDay;
   const hrs = F.hours.map(h => {
     const hh = +h.t.slice(11,13), inWin = hh>=WIN_START && hh<=WIN_END;
-    const pr = h.pr!=null && h.pr>=0.2 && h.prcp>=0.05 ? Math.round(h.pr*10)*10+'%' : '';
+    const pr = h.pr!=null && h.pr>=0.2 && h.prcp>=0.05 ? DROPSYM + Math.round(h.pr*10)*10+'%' : '';
     return `<div class="hr ${inWin?'win':'out'}"><div class="t">${String(hh).padStart(2,'0')}</div><div class="p">${pr}</div>${icon(hourCond(h).k)}<div class="h">${r0(h.temp)}°</div></div>`;
   }).join('');
   const mm = v => v==null ? '–' : (v<0.05 ? 'trocken' : fmt1(v)+' mm');

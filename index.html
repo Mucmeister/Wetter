@@ -68,7 +68,7 @@ body.snow{--bg1:#6f8299;--bg2:#b4c3d4}
 .hr svg{width:30px;height:30px}
 .hr.win .h{color:#fff}
 .hr.out{opacity:.62}
-.days .row{display:grid;column-gap:4px;grid-template-columns:84px 34px 40px 36px 1fr 36px;align-items:center;
+.days .row{display:grid;column-gap:4px;grid-template-columns:78px 34px 46px 36px 1fr 36px;align-items:center;
   padding:10px 16px;border-top:1px solid var(--line);gap:6px;cursor:pointer;font-size:18px;font-weight:500}
 .days .row:first-child{border-top:0}
 .days .d{font-weight:600}
@@ -181,7 +181,11 @@ body{--fg:#f3eee4;--fg2:rgba(243,238,228,.72);--fg3:rgba(243,238,228,.5);--card:
 .hero .temp{font-family:"Fraunces";font-weight:300;font-variation-settings:"opsz" 144;margin-left:14px}
 .hero .place{font-family:"Fraunces";font-weight:400}
 .tile .v{font-family:"Fraunces";font-weight:350}
-.hr .p,.days .pp,.nightrain,.infl i{color:#e7c27e}.infl i{background:#d9b26f}
+.nightrain,.infl i{color:#e7c27e}
+.hr .p,.days .pp,.legend{color:#7cc4ff}
+.hr .p,.days .pp{white-space:nowrap}
+svg.drop,.hr svg.drop,.days svg.drop,.legend svg.drop{width:7px;height:10px;margin:0 2px 0 0;vertical-align:-1px;display:inline-block}
+.legend{font-size:12px;padding:8px 16px 4px}.infl i{background:#d9b26f}
 .iconbtn{background:rgba(243,238,228,.08)}
 html{background:#0d1a28}
 .basemap{filter:invert(1) hue-rotate(185deg) brightness(.78) contrast(.9) saturate(.35)}
