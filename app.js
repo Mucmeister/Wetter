@@ -32,7 +32,7 @@ const BUCKETS = [{k:'d1', off:1, from:0, to:1, label:'0–1'}, {k:'d2', off:2, f
 const bucketFor = d => BUCKETS.find(b => d >= b.from && d <= b.to);
 
 const DEMO = location.hash === '#demo';
-const BUILD = '2026-11-20.9';   // bei jeder Änderung erhöhen (gleich wie version.txt)
+const BUILD = '2026-11-20.10';   // bei jeder Änderung erhöhen (gleich wie version.txt)
 // Neue Version automatisch laden, sobald die App wieder geöffnet wird
 async function checkUpdate(){
   try{ const v = (await fetch('version.txt?' + Date.now(), {cache:'no-store'}).then(r => r.ok ? r.text() : '')).trim();
@@ -86,7 +86,7 @@ function splitByModel(block, modelIds){
 }
 
 /* ================= Daten laden ================= */
-const HOURLY = 'temperature_2m,apparent_temperature,precipitation,weather_code,cloud_cover,wind_speed_10m,wind_gusts_10m,relative_humidity_2m,is_day';
+const HOURLY = 'sunshine_duration,temperature_2m,apparent_temperature,precipitation,weather_code,cloud_cover,wind_speed_10m,wind_gusts_10m,relative_humidity_2m,is_day';
 const STATS_MIN = 360;          // Prüfung an Messwerten: alle 6 Stunden neu
 const PAST_DAYS = 46;           // so weit zurück werden alte Vorhersagen geholt
 const WINDOW_DAYS = 30;         // Lernfenster für Korrektur und Gewichte
@@ -435,7 +435,7 @@ function build(data){
     const isDay = (() => { for(const m of MODELS){ const v = per[m.id]?.is_day?.[i]; if(v!=null) return v; } const h=+t.slice(11,13); return h>=7&&h<18?1:0; })();
     return {t, i, temp, prcp, cloud, pr, isDay, thunder: wsum? th/wsum : 0, fog: wsum? fog/wsum:0,
       feels: blend('apparent_temperature', i, 't'), wind: blend('wind_speed_10m', i, 't'),
-      gust: blend('wind_gusts_10m', i, 't'), rh: blend('relative_humidity_2m', i, 't')};
+      gust: blend('wind_gusts_10m', i, 't'), rh: blend('relative_humidity_2m', i, 't'), sun: blend('sunshine_duration', i, 't')};
   });
 
   // Wahrscheinlichkeit für ≥thr mm Niederschlag im Stundenbereich [i0..i1] (Summe)
@@ -538,6 +538,11 @@ function build(data){
     const pEarly = i0>=0 ? sumP(i0+1, iS) : null;          // 0–8 Uhr
     const pLate  = sumP(iE+1, (i0>=0?i0:iS-WIN_START)+24); // 20–24 Uhr
     const fullT = full.map(h=>h.temp).filter(v=>v!=null);
+    // Sonnenscheindauer 8–20 Uhr (Stundenwerte gelten für die Stunde davor); nur Modelle, die sie liefern
+    const sunV = acc.map(h=>h.sun).filter(v=>v!=null);
+    const sunH = sunV.length >= acc.length - 2 ? sunV.reduce((a,b)=>a+b,0)/3600 : null;
+    const sunM = avail.map(m => { const S = per[m.id].sunshine_duration; if(!S) return null; let x=0;
+      for(let i=iS+1;i<=iE;i++){ if(S[i]==null) return null; x+=S[i]; } return x/3600; }).filter(v=>v!=null);
     const fullDay = {hours: full, tmin: fullT.length ? Math.min(...fullT) : tmin, tmax: fullT.length ? Math.max(...fullT) : tmax, pEarly, pLate};
     const nightP = (pEarly||0) + (pLate||0);
     // Modellstreuung + Einzelwerte
@@ -569,7 +574,7 @@ function build(data){
       }
     }
     const cond = condition({cloud, psum, pprob, thunder, fog, temp: (tmax+tmin)/2, isDay:1});
-    return {d, di, tmax, tmin, psum, pprob, cloud, thunder, nightP, fullDay, byModel, sd, cond, minT, bucket:b, range};
+    return {d, di, tmax, tmin, psum, pprob, cloud, thunder, nightP, fullDay, byModel, sd, cond, minT, bucket:b, range, sunH, sunM};
   }).filter(Boolean);
 
   const cur = hourly[nowIdx];
@@ -637,6 +642,8 @@ function condition({cloud, psum, pprob, thunder, fog, temp, isDay, hourly}){
 }
 function hourCond(h){ return condition({cloud:h.cloud, psum:h.prcp||0, pprob:h.pr||0, thunder:h.thunder, fog:h.fog, temp:h.temp, isDay:h.isDay, hourly:true}); }
 
+const SUNSYM = '<svg class="sunsym" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="3.2" fill="currentColor"/><g stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 1.2v1.6M8 13.2v1.6M1.2 8h1.6M13.2 8h1.6M3.2 3.2l1.1 1.1M11.7 11.7l1.1 1.1M3.2 12.8l1.1-1.1M11.7 4.3l1.1-1.1"/></g></svg>';
+const sunHrs = h => h < 0.5 ? 'kaum Sonne' : `${Math.round(h)} Std. Sonne`;
 const DROPSYM = '<svg class="drop" viewBox="0 0 10 14" aria-hidden="true"><path d="M5 1C5 1 1 6.2 1 9a4 4 0 0 0 8 0C9 6.2 5 1 5 1z" fill="currentColor"/></svg>';
 const SUN = '#ffd23f', CLOUD='#fff', DARK='#c9d3df', DROP='#5ec2ff', MOONC='#e9eefc';
 function icon(k){
@@ -723,7 +730,7 @@ function render(place, R){
     <div class="temp">${r0(c.temp)}°</div>
     ${R.curObs ? `<div class="measured">${R.curObs.t.toLocaleString("de-DE",{minimumFractionDigits:1,maximumFractionDigits:1})}° gemessen an ${R.curObs.name.startsWith('LMU') ? 'der ' : 'der Station '}${esc(R.curObs.name)}${R.curObs.dist >= 1 ? ` (${fmt1(R.curObs.dist)} km ${R.curObs.fromYou ? 'von dir' : 'vom Ortszentrum'})` : ''}, ${R.curObs.age < 2 ? 'gerade eben' : `vor ${Math.round(R.curObs.age)} Min.`}</div>` : ''}
     <div class="cond">${hc.txt}</div>
-    <div class="hl">H: ${r0(hlDay.tmax)}°  T: ${r0(hlDay.tmin)}°</div>
+    <div class="hl">H: ${r0(hlDay.tmax)}°  T: ${r0(hlDay.tmin)}°${hlDay.sunH!=null ? `<span class="sun">${SUNSYM}${sunHrs(hlDay.sunH)}</span>` : ''}</div>
     <div class="sub">${hlLabel} · Konsens aus ${R.avail.length} Modellen</div>
     <div class="updated">${updatedTxt()}</div>
   </div>
@@ -823,6 +830,7 @@ function dayDetail(d, i){
     <div class="hours">${hrs}</div>
     <div class="dline">${r0(F.tmin)}° bis ${r0(F.tmax)}° <span>· 8–20 Uhr: ${r0(d.tmin)}° bis ${r0(d.tmax)}°</span></div>
     <div class="dline">Regen <span style="white-space:nowrap">0–8 Uhr:</span> ${mm(F.pEarly)} · <span style="white-space:nowrap">8–20 Uhr:</span> ${mm(d.psum)} · <span style="white-space:nowrap">20–24 Uhr:</span> ${mm(F.pLate)}</div>
+    ${d.sunH!=null ? `<div class="dline">Sonnenschein 8–20 Uhr: ${d.sunH<0.5 ? 'kaum' : 'etwa ' + Math.round(d.sunH) + ' Std.'}${d.sunM.length>=2 && Math.round(Math.max(...d.sunM)) > Math.round(Math.min(...d.sunM)) ? ` <span>· Modelle ${Math.round(Math.min(...d.sunM))}–${Math.round(Math.max(...d.sunM))} Std.</span>` : ''}</div>` : ''}
     ${certainty(d)}
     <div class="dsec">Was die einzelnen Modelle sagen (8–20 Uhr)</div>
     <div class="hint">Jede Zeile ist ein eigenes Wettermodell. <b>Einfluss</b> zeigt, wie stark es in die Vorhersage oben eingeht: Modelle, die hier zuletzt genauer lagen, zählen mehr.</div>
