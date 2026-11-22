@@ -32,7 +32,7 @@ const BUCKETS = [{k:'d1', off:1, from:0, to:1, label:'0–1'}, {k:'d2', off:2, f
 const bucketFor = d => BUCKETS.find(b => d >= b.from && d <= b.to);
 
 const DEMO = location.hash === '#demo';
-const BUILD = '2026-11-22.7';   // bei jeder Änderung erhöhen (gleich wie version.txt)
+const BUILD = '2026-11-22.8';   // bei jeder Änderung erhöhen (gleich wie version.txt)
 // Neue Version automatisch laden, sobald die App wieder geöffnet wird
 async function checkUpdate(){
   try{ const v = (await fetch('version.txt?' + Date.now(), {cache:'no-store'}).then(r => r.ok ? r.text() : '')).trim();
@@ -1090,7 +1090,7 @@ function rainChart(R){
     + `<line x1="${L0}" x2="${W}" y1="${H-0.5}" y2="${H-0.5}" stroke="rgba(243,238,228,.25)"/><text x="${L0-4}" y="${H}" text-anchor="end">0</text>`;
   const word = mx < 2.5 ? 'leicht' : mx < 10 ? 'mäßig' : 'kräftig';           // Einteilung wie beim DWD
   const t = ms => new Date(ms).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'});
-  return `<div class="rain2h"><div class="rlab">Niederschlag laut Radar in mm pro Stunde · bis ${nf(Math.round(mx*10)/10)} mm/h (${word})${kinds.length ? '<br>' + kinds.map(k => `<i class="pk" style="background:${PCOL[k]}"></i>${k}`).join(' ') : ''}</div><svg viewBox="0 0 ${W} ${H}">${grid}${bars}</svg>
+  return `<div class="rain2h"><div class="rlab">Niederschlag laut Radar in mm/h · bis ${nf(Math.round(mx*10)/10)} mm/h (${word})${kinds.length ? '<br>' + kinds.map(k => `<i class="pk" style="background:${PCOL[k]}"></i>${k}`).join(' ') : ''}</div><svg viewBox="0 0 ${W} ${H}">${grid}${bars}</svg>
     <div class="ax" style="padding-left:${(L0/W*100).toFixed(1)}%"><span>Jetzt</span><span>${t(now+30*60e3)}</span><span>${t(now+60*60e3)}</span><span>${t(now+90*60e3)}</span><span>${t(now+120*60e3)}</span></div></div>`;
 }
 
