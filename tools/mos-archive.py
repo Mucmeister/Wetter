@@ -9,13 +9,23 @@ PLACES = {'Hilden':(51.168,6.939),'München':(48.150,11.570),'Hamburg':(53.551,9
 out = sys.argv[1]; os.makedirs(out, exist_ok=True)
 now = datetime.datetime.now(datetime.UTC)
 rec = {'run': now.strftime('%Y-%m-%dT%H:%M'), 'places': {}}
+def get(u): return json.load(urllib.request.urlopen(u, timeout=60))
 for n, (la, lo) in PLACES.items():
     try:
+        # gleiche Stationswahl wie in der App: max. 30 km, höchstens 150 m Höhenunterschied, Station mit Daten
+        el = get(f'https://api.open-meteo.com/v1/elevation?latitude={la}&longitude={lo}')['elevation'][0]
+        src = [x for x in get(f'https://api.brightsky.dev/sources?lat={la}&lon={lo}&max_dist=30000')['sources']
+               if x['observation_type'] == 'forecast' and (x.get('height') is None or abs(x['height'] - el) <= 150)]
+        src.sort(key=lambda x: x['distance'])
         a = now.strftime('%Y-%m-%d'); b = (now + datetime.timedelta(days=7)).strftime('%Y-%m-%d')
-        w = json.load(urllib.request.urlopen(f'https://api.brightsky.dev/weather?lat={la}&lon={lo}&date={a}&last_date={b}&tz=Etc/UTC', timeout=60))
-        src = w['sources'][0]
-        rec['places'][n] = {'src': [src['station_name'], src['distance'], src['height']],
-                            'w': [[x['timestamp'][:13], x['temperature'], x['precipitation']] for x in w['weather']]}
+        for c in src[:3]:
+            try: w = get(f'https://api.brightsky.dev/weather?source_id={c["id"]}&date={a}&last_date={b}&tz=Etc/UTC')
+            except Exception: continue
+            rows = [[x['timestamp'][:13], x['temperature'], x['precipitation']] for x in w['weather'] if x['temperature'] is not None]
+            if len(rows) < 48: continue
+            rec['places'][n] = {'src': [c['station_name'], c['distance'], c['height'], el], 'w': rows}
+            break
+        else: print(n, 'keine passende MOSMIX-Station')
     except Exception as e: print(n, e)
 fn = os.path.join(out, now.strftime('%Y-%m-%dT%H') + '.json')
 json.dump(rec, open(fn, 'w')); print('gespeichert', fn)
