@@ -32,7 +32,7 @@ const BUCKETS = [{k:'d1', off:1, from:0, to:1, label:'0–1'}, {k:'d2', off:2, f
 const bucketFor = d => BUCKETS.find(b => d >= b.from && d <= b.to);
 
 const DEMO = location.hash === '#demo';
-const BUILD = '2026-11-22.12';   // bei jeder Änderung erhöhen (gleich wie version.txt)
+const BUILD = '2026-11-22.13';   // bei jeder Änderung erhöhen (gleich wie version.txt)
 // Neue Version automatisch laden, sobald die App wieder geöffnet wird
 async function checkUpdate(){
   try{ const v = (await fetch('version.txt?' + Date.now(), {cache:'no-store'}).then(r => r.ok ? r.text() : '')).trim();
@@ -917,7 +917,7 @@ function render(place, R){
 
   <div class="grid">
     <div class="card"><h3>Gefühlt</h3><div class="tile"><div class="v">${r0(c.feels)}°</div><div class="s">${feelTxt(c)}</div></div></div>
-    <div class="card"><h3>Niederschlag ${afterWin?'morgen':'heute'}</h3><div class="tile"><div class="v">${fmt1(pDay)} mm</div><div class="s">ganzer Tag<br><span style="white-space:nowrap">8–20 Uhr: ${fmt1(pToday)} mm</span> · <span style="white-space:nowrap">${Math.round((hlDay.pprob||0)*100)} %</span></div></div></div>
+    <div class="card"><h3>Niederschlag ${afterWin?'morgen':'heute'}</h3><div class="tile"><div class="v">${fmt1(pDay)} mm</div><div class="s">${pDay < 0.05 && (hlDay.pprob||0) < 0.15 ? 'trocken erwartet' : `ganzer Tag<br>8–20 Uhr: ${fmt1(pToday)} mm${(hlDay.pprob||0) >= 0.15 ? `<br>Wahrscheinlichkeit ${Math.round(hlDay.pprob*10)*10} %` : ''}`}</div></div></div>
     <div class="card"><h3>Wind</h3><div class="tile"><div class="v">${r0(c.wind)} <span style="font-size:16px">km/h</span>${c.wdir != null && c.wind >= 2 ? windArrow(c.wdir) : ''}</div><div class="s">${c.wdir != null && c.wind >= 2 ? `aus ${dirName(c.wdir)}<br>` : ''}Böen bis ${r0(c.gust)} km/h</div></div></div>
     <div class="card"><h3>Sonne</h3><div class="tile"><div class="v sunv">${sunRS}</div><div class="s">${sunPossible(R, hlDay, sd)}</div></div></div>
     <div class="card"><h3>Luftfeuchte</h3><div class="tile"><div class="v">${r0(c.rh)} %</div><div class="s">${dewTxt(c)}</div></div></div>
