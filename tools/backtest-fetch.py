@@ -2,7 +2,11 @@
 import json, urllib.request, datetime, time, sys
 MODELS = ['ecmwf_ifs','ecmwf_aifs025_single','dwd_icon_seamless','meteofrance_seamless','ukmo_seamless','ncep_gfs_seamless','ncep_aigfs025']
 PLACES = {'Hilden':(51.168,6.939),'München':(48.150,11.570),'Hamburg':(53.551,9.993),'Berlin':(52.520,13.405),
-          'Garmisch':(47.492,11.096),'Freiburg':(47.999,7.842),'Rostock':(54.092,12.099),'Nürnberg':(49.452,11.077)}
+          'Garmisch':(47.492,11.096),'Freiburg':(47.999,7.842),'Rostock':(54.092,12.099),'Nürnberg':(49.452,11.077),
+          'Bremen':(53.076,8.807),'Kreuth':(47.641,11.745),'Lenggries':(47.683,11.575),'Düsseldorf':(51.223,6.779),
+          'Frankfurt':(50.116,8.684),'Greven':(52.094,7.594),'Bodenheim':(49.935,8.320),'Guntersblum':(49.798,8.346),
+          'Magdeburg':(52.131,11.632),'Köln':(50.933,6.950),'Braunschweig':(52.266,10.527),'Starnberg':(48.002,11.344),
+          'Lichtenhaag':(48.493,12.374),'Schöllnach':(48.754,13.178),'Leipzig':(51.340,12.371)}
 def get(u):
     for k in range(3):
         try: return json.load(urllib.request.urlopen(u, timeout=90))
@@ -18,7 +22,8 @@ for name,(la,lo) in PLACES.items():
         for k in range(4):
             a = (end - datetime.timedelta(days=24*(k+1))).strftime('%Y-%m-%dT%H:00'); b = (end - datetime.timedelta(days=24*k)).strftime('%Y-%m-%dT%H:00')
             w = get(f'https://api.brightsky.dev/weather?lat={la}&lon={lo}&date={a}&last_date={b}&tz=Etc/UTC')
-            ss = [s for s in w.get('sources',[]) if s['observation_type'] != 'forecast' and s['distance'] <= 25000]
+            el = p.get('elevation')
+            ss = [s for s in w.get('sources',[]) if s['observation_type'] != 'forecast' and s['distance'] <= 25000 and (el is None or s.get('height') is None or abs(s['height'] - el) <= 150)]
             if not ss: continue
             pick = sorted(ss, key=lambda s: s['distance'])[0]
             if src is None: src = {'name': pick['station_name'], 'dist': pick['distance'], 'h': pick['height']}
