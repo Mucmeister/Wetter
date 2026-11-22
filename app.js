@@ -32,7 +32,7 @@ const BUCKETS = [{k:'d1', off:1, from:0, to:1, label:'0–1'}, {k:'d2', off:2, f
 const bucketFor = d => BUCKETS.find(b => d >= b.from && d <= b.to);
 
 const DEMO = location.hash === '#demo';
-const BUILD = '2026-11-22.5';   // bei jeder Änderung erhöhen (gleich wie version.txt)
+const BUILD = '2026-11-22.6';   // bei jeder Änderung erhöhen (gleich wie version.txt)
 // Neue Version automatisch laden, sobald die App wieder geöffnet wird
 async function checkUpdate(){
   try{ const v = (await fetch('version.txt?' + Date.now(), {cache:'no-store'}).then(r => r.ok ? r.text() : '')).trim();
@@ -782,7 +782,7 @@ function icon(k, n){
     partly: sun(11,11,5)+cloud(3,5,1.05), partlynight: moon(10,10,5.5)+cloud(3,5,1.05),
     cloud: cloud(-1,1,1.1,DARK)+cloud(3,5,1.0),
     showers: sun(11,9,4.5)+cloud(3,2,1.05)+drops(n||2), rain: cloud(2,0,1.15,DARK)+drops(n||3),
-    snow: cloud(2,0,1.15,DARK)+flakes, snowshower: sun(11,9,4.5)+cloud(3,2,1.05)+flakes,
+    snow: cloud(2,0,1.15,DARK)+flakes, sleet: cloud(2,0,1.15,DARK)+`<line x1="9" y1="24" x2="7.5" y2="28.5" stroke="${DROP}" stroke-width="2.2" stroke-linecap="round"/><circle cx="14" cy="27" r="1.6" fill="#fff"/><line x1="21" y1="24" x2="19.5" y2="28.5" stroke="${DROP}" stroke-width="2.2" stroke-linecap="round"/>`, snowshower: sun(11,9,4.5)+cloud(3,2,1.05)+flakes,
     thunder: cloud(2,-1,1.15,DARK)+bolt, fog: cloud(2,0,1.1,DARK)+`<g stroke="#fff" stroke-width="2" stroke-linecap="round" opacity=".85"><line x1="5" y1="25" x2="27" y2="25"/><line x1="8" y1="29" x2="24" y2="29"/></g>`,
   }[k] || '';
   return `<svg viewBox="0 0 32 32">${inner}</svg>`;
@@ -800,11 +800,11 @@ function render(place, R){
   $('#btnLoc').style.opacity = 1;
   if(!R.days.length || !R.cur){ $('#app').innerHTML = `<div class="hero"><div class="place">${esc(place.name)}</div></div><div class="err">Für diesen Ort liegen gerade keine vollständigen Vorhersagedaten vor. Zum erneuten Versuch nach unten ziehen.</div>`; return; }
   const c = R.cur, today = R.days[0];
-  const hc = hourCond(c);
+  const hc = nowCond(R);
   // Hintergrund
   const cls = [];
   if(!c.isDay) cls.push('night');
-  if(['rain','thunder','showers'].includes(hc.k)) cls.push('rain'); else if(hc.k.startsWith('snow')) cls.push('snow'); else if(c.cloud>75 || hc.k==='fog') cls.push('overcast');
+  if(['rain','thunder','showers'].includes(hc.k)) cls.push('rain'); else if(hc.k.startsWith('snow') || hc.k === 'sleet') cls.push('snow'); else if(c.cloud>75 || hc.k==='fog') cls.push('overcast');
   document.body.className = cls.join(' ') + (document.body.classList.contains('mapopen') ? ' mapopen' : '');
   requestAnimationFrame(() => { const c1 = getComputedStyle(document.body).getPropertyValue('--bg1').trim();
     if(c1){ document.querySelector('meta[name=theme-color]').setAttribute('content', c1); document.documentElement.style.background = c1; } });
@@ -822,7 +822,7 @@ function render(place, R){
     const inWin = hh>=WIN_START && hh<=WIN_END;
     const pr = h.pr!=null && h.pr>=0.2 && h.prcp>=0.05 ? DROPSYM + Math.round(h.pr*10)*10+'%' : '';
     return `<div class="hr ${inWin?'win':'out'}"><div class="t">${j===0?'Jetzt':String(hh).padStart(2,'0')}</div>
-      <div class="p">${pr}</div>${(c => icon(c.k, c.n))(hourCond(h))}<div class="h">${r0(h.temp)}°</div></div>`;
+      <div class="p">${pr}</div>${j===0 ? `<span class="nowi">${(c => icon(c.k, c.n))(nowCond(R))}</span>` : (c => icon(c.k, c.n))(hourCond(h))}<div class="h">${r0(h.temp)}°</div></div>`;
   }).join('');
 
   // 10 Tage
@@ -1195,6 +1195,26 @@ function ptypeAt(R, i, now){
   if(t == null) return PT_ANY;
   return t <= 0.5 ? PTYPE[2] : t < 2 ? PT_ANY : PTYPE[0];            // um 1 °C ist Schnee oder Regen offen
 }
+function nowCond(R){
+  const c = R.cur, hc = hourCond(c);
+  const radarWet = R.NC && R.NC.rateNow >= 0.1, wet = radarWet || ['rain','showers','snow','snowshower'].includes(hc.k);
+  if(!wet || hc.k === 'thunder') return hc;
+  const P = ptypeAt(R, R.nowIdx, true), rate = radarWet ? R.NC.rateNow : (c.prcp || 0);
+  const st = rate < 0.5 ? 'Leichter ' : rate >= 4 ? 'Starker ' : '';
+  if(P.noun === 'Schnee') return {k:'snow', txt: st + 'Schneefall'};
+  if(P.noun === 'Schneeregen') return {k:'sleet', txt:'Schneeregen'};
+  if(P.noun === 'gefrierender Regen') return {k:'rain', n:1, txt:'Gefrierender Regen – Glätte!'};
+  if(P.noun === 'Graupel' || P.noun === 'Hagel') return {k:'snowshower', txt: P.noun};
+  if(P.noun === 'Regen') return ['rain','showers'].includes(hc.k) ? hc : {k:'rain', n: rate < 0.5 ? 1 : rate < 2.5 ? 2 : 3, txt: st + 'Regen'};
+  return ['rain','showers','snow','snowshower'].includes(hc.k) ? {...hc, txt:'Niederschlag'} : {k:'rain', n:1, txt:'Niederschlag'};
+}
+// wenn die gemessene Niederschlagsart nachträglich eintrifft: Text, Symbol und Satz anpassen
+function applyNowCond(){
+  const R = state.res; if(!R || !R.cur) return;
+  const hc = nowCond(R), el = document.querySelector('#hero .cond'); if(el) el.textContent = hc.txt;
+  const ni = document.querySelector('.nowi'); if(ni) ni.innerHTML = icon(hc.k, hc.n);
+  const n = document.querySelector('.note'); if(n) n.innerHTML = makeSummary(R);
+}
 function makeSummary(R){
   const c = R.cur, rest = R.hourly.slice(R.nowIdx, R.nowIdx+12);
   const rainH = rest.find(h => h.pr>=0.5 && h.prcp>=0.2);
@@ -1212,7 +1232,7 @@ function makeSummary(R){
     const later = R.hourly.slice(R.nowIdx+3, R.nowIdx+12).find(h => h.pr>=0.5 && h.prcp>=0.2);
     if(R.NC.rateNow < 0.1 && !(ch && ch.wet) && later) s += `, danach ${ptypeAt(R, later.i).noun} ab etwa ${later.t.slice(11,13)} Uhr`;
   }
-  else if(['rain','thunder','snow'].includes(hourCond(R.hourly[R.nowIdx]).k) || (rainH && rainH.i===R.nowIdx)) s = ptypeAt(R, R.nowIdx, true).it;
+  else if(['rain','thunder','snow','sleet'].includes(nowCond(R).k) || (rainH && rainH.i===R.nowIdx)) s = ptypeAt(R, R.nowIdx, true).it;
   else if(rainH) s = `${ptypeAt(R, rainH.i).noun} wahrscheinlich ab etwa ${rainH.t.slice(11,13)} Uhr`;
   else if(dry) s = 'In den nächsten 12 Stunden trocken';
   else s = ptypeAt(R, R.nowIdx + 3).noun === 'Schnee' ? 'Vereinzelt Schneeschauer möglich' : 'Vereinzelt Schauer möglich';
@@ -1270,7 +1290,7 @@ function radarEngine(){
         E.ok = true; if(E.onReady) E.onReady(); if(E.again) E.draw(); }
       else if(m.cmd === 'value' && m.id === E.vid){
         state.hgType = m.type != null && m.type <= 5 ? {type: m.type, at: Date.now(), key: E.valKey} : null;
-        const n = document.querySelector('.note'); if(n && state.res) n.innerHTML = makeSummary(state.res);
+        applyNowCond();
       }
     };
     wk.onerror = () => { E.failed = true; };
