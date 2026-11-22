@@ -10,7 +10,7 @@ jobs:
       - run: |
           set +e; mkdir out
           npm i -s playwright@1 >/dev/null 2>&1 && npx -y playwright install --with-deps chromium >/dev/null 2>&1
-          node tools/radar-check.js > out/log.txt 2>&1; cat out/log.txt
+          node tools/radar-check.js > out/log.txt 2>&1; node tools/main-check.js >> out/log.txt 2>&1; cat out/log.txt
           cd out && git init -q -b probe && git add -A
           git -c user.name=bot -c user.email=bot@users.noreply.github.com commit -qm check
           git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" probe
