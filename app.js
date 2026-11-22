@@ -35,7 +35,7 @@ const BUCKETS = [{k:'d1', off:1, from:0, to:1, label:'0–1'}, {k:'d2', off:2, f
 const bucketFor = d => BUCKETS.find(b => d >= b.from && d <= b.to);
 
 const DEMO = location.hash === '#demo';
-const BUILD = '2026-11-22.16';   // bei jeder Änderung erhöhen (gleich wie version.txt)
+const BUILD = '2026-11-22.17';   // bei jeder Änderung erhöhen (gleich wie version.txt)
 // Neue Version automatisch laden, sobald die App wieder geöffnet wird
 async function checkUpdate(){
   try{ const v = (await fetch('version.txt?' + Date.now(), {cache:'no-store'}).then(r => r.ok ? r.text() : '')).trim();
@@ -141,13 +141,17 @@ async function loadMOS(lat, lon, elev){
   const mk = `wxm:${lat.toFixed(2)},${lon.toFixed(2)}`, c = store.get(mk);
   if(c && Date.now() - c.t < 30*60e3) return c.d;
   const src = await getJSON(`https://api.brightsky.dev/sources?lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}&max_dist=30000`, 8000).catch(() => null);
-  const pick = src && (src.sources || []).filter(s => s.observation_type === 'forecast' && s.distance <= 30000 && (elev == null || s.height == null || Math.abs(s.height - elev) <= 150))
-                        .sort((a,b) => a.distance - b.distance)[0];
+  const cand = src ? (src.sources || []).filter(s => s.observation_type === 'forecast' && s.distance <= 30000 && (elev == null || s.height == null || Math.abs(s.height - elev) <= 150))
+                        .sort((a,b) => a.distance - b.distance).slice(0, 3) : [];
   let d = null;
-  if(pick){
-    const from = new Date().toISOString().slice(0,10), to = new Date(Date.now() + 11*864e5).toISOString().slice(0,10);
-    const w = await getJSON(`https://api.brightsky.dev/weather?source_id=${pick.id}&date=${from}&last_date=${to}&tz=Etc/UTC`, 12000);
-    d = {src: {name: pick.station_name, dist: pick.distance/1000, h: pick.height}, w: (w.weather || []).map(x => [x.timestamp, x.temperature, x.precipitation, x.cloud_cover, x.wind_speed, x.wind_gust_speed, x.wind_direction, x.pressure_msl, x.sunshine, x.dew_point])};
+  // manche Einträge liefern keine aktuellen Daten: nächste Station versuchen
+  const from = new Date().toISOString().slice(0,10), to = new Date(Date.now() + 11*864e5).toISOString().slice(0,10);
+  for(const pick of cand){
+    const w = await getJSON(`https://api.brightsky.dev/weather?source_id=${pick.id}&date=${from}&last_date=${to}&tz=Etc/UTC`, 12000).catch(() => null);
+    const rows = w && (w.weather || []).filter(x => x.temperature != null);
+    if(!rows || rows.length < 48) continue;
+    d = {src: {name: pick.station_name, dist: pick.distance/1000, h: pick.height}, w: rows.map(x => [x.timestamp, x.temperature, x.precipitation, x.cloud_cover, x.wind_speed, x.wind_gust_speed, x.wind_direction, x.pressure_msl, x.sunshine, x.dew_point])};
+    break;
   }
   try{ store.set(mk, {t: Date.now(), d}); }catch(e){}
   return d;
