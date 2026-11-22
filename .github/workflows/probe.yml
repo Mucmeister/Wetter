@@ -1,0 +1,15 @@
+name: Rueckrechnung-Daten
+on: workflow_dispatch
+permissions:
+  contents: write
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          set +e; mkdir out
+          python3 tools/backtest-fetch.py out/bt.json > out/log.txt 2>&1; cat out/log.txt; gzip -9 out/bt.json
+          cd out && git init -q -b probe && git add -A
+          git -c user.name=bot -c user.email=bot@users.noreply.github.com commit -qm data
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" probe
