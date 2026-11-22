@@ -32,7 +32,7 @@ const BUCKETS = [{k:'d1', off:1, from:0, to:1, label:'0–1'}, {k:'d2', off:2, f
 const bucketFor = d => BUCKETS.find(b => d >= b.from && d <= b.to);
 
 const DEMO = location.hash === '#demo';
-const BUILD = '2026-11-22.10';   // bei jeder Änderung erhöhen (gleich wie version.txt)
+const BUILD = '2026-11-22.11';   // bei jeder Änderung erhöhen (gleich wie version.txt)
 // Neue Version automatisch laden, sobald die App wieder geöffnet wird
 async function checkUpdate(){
   try{ const v = (await fetch('version.txt?' + Date.now(), {cache:'no-store'}).then(r => r.ok ? r.text() : '')).trim();
@@ -1031,9 +1031,13 @@ function histDetail(H, k){
   // Platzierung nach Treffsicherheit (Abweichung bei Hoch + Tief), die App-Prognose zählt mit
   // Platz = 1 + Anzahl der Vorhersagen, die echt besser lagen (gleich gute teilen sich den Platz)
   const re = m => Math.abs(r0(m.tmax) - r0(o.tmax)) + Math.abs(r0(m.tmin) - r0(o.tmin));
-  const appM = {tmin:f.tmin, tmax:f.tmax}, pool = [appM, ...d.models];
-  const place = m => { const k = 1 + pool.filter(x => re(x) < re(m)).length; return k <= 3 ? `<i class="rank r${k}">${k}</i>` : '<i class="rank"></i>'; };
-  const rows = d.models.slice().sort((a,b) => re(a) - re(b) || err(a) - err(b)).map(m => `<div class="hrow"><div class="n">${place(m)}${nm(m.id)}</div><div>${r0(m.tmin)}°</div><div>${r0(m.tmax)}°</div><div>${m.rain == null ? '–' : fmt1(m.rain)}</div></div>`).join('');
+  // bei gleicher Temperatur-Abweichung entscheidet die Niederschlagsmenge (auf 0,1 mm gerundet)
+  // danach die genaue (ungerundete) Temperatur-Abweichung, sodass gleiche Plätze praktisch nicht mehr vorkommen
+  const rr = m => m.rain == null || o.rain == null ? Infinity : Math.abs(Math.round(m.rain*10) - Math.round(o.rain*10));
+  const cmp = (a, b) => re(a) - re(b) || rr(a) - rr(b) || err(a) - err(b);
+  const appM = {tmin:f.tmin, tmax:f.tmax, rain:f.rain}, pool = [appM, ...d.models];
+  const place = m => { const k = 1 + pool.filter(x => cmp(x, m) < 0).length; return k <= 3 ? `<i class="rank r${k}">${k}</i>` : '<i class="rank"></i>'; };
+  const rows = d.models.slice().sort((a,b) => cmp(a, b) || err(a) - err(b)).map(m => `<div class="hrow"><div class="n">${place(m)}${nm(m.id)}</div><div>${r0(m.tmin)}°</div><div>${r0(m.tmax)}°</div><div>${m.rain == null ? '–' : fmt1(m.rain)}</div></div>`).join('');
   const nav = `<div class="histnav">${k > 0 ? `<button data-k="${k-1}" aria-label="Tag davor">‹</button>` : '<span></span>'}<b>${fmtDay(d.d)}</b>${k < H.days.length-1 ? `<button data-k="${k+1}" aria-label="Tag danach">›</button>` : '<span></span>'}</div>`;
   return `${nav}
     ${histChart(d)}
@@ -1043,7 +1047,7 @@ function histDetail(H, k){
     <div class="hrow obs"><div class="n"><i class="rank"></i>Gemessen</div><div>${r0(o.tmin)}°</div><div>${r0(o.tmax)}°</div><div>${o.rain == null ? '–' : fmt1(o.rain)}</div></div>
     <div class="hrow cons"><div class="n">${place(appM)}App-Prognose</div><div>${r0(f.tmin)}°</div><div>${r0(f.tmax)}°</div><div>${f.rain == null ? '–' : fmt1(f.rain)}</div></div>
     ${rows}
-    <div class="hint" style="margin-top:6px"><i class="rank r1">1</i><i class="rank r2">2</i><i class="rank r3">3</i> Platz nach Treffsicherheit bei Hoch und Tief. An der Wetterstation gemessener Niederschlag (${esc(st ? st.name : 'Wetterstation')}).</div>`;
+    <div class="hint" style="margin-top:6px"><i class="rank r1">1</i><i class="rank r2">2</i><i class="rank r3">3</i> Platz nach Treffsicherheit bei Hoch und Tief, bei Gleichstand entscheidet der Niederschlag. An der Wetterstation gemessener Niederschlag (${esc(st ? st.name : 'Wetterstation')}).</div>`;
 }
 
 // Tagesdetail: Inhalt wird beim ersten Öffnen erzeugt
