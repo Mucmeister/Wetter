@@ -32,7 +32,7 @@ const BUCKETS = [{k:'d1', off:1, from:0, to:1, label:'0–1'}, {k:'d2', off:2, f
 const bucketFor = d => BUCKETS.find(b => d >= b.from && d <= b.to);
 
 const DEMO = location.hash === '#demo';
-const BUILD = '2026-11-22.8';   // bei jeder Änderung erhöhen (gleich wie version.txt)
+const BUILD = '2026-11-22.9';   // bei jeder Änderung erhöhen (gleich wie version.txt)
 // Neue Version automatisch laden, sobald die App wieder geöffnet wird
 async function checkUpdate(){
   try{ const v = (await fetch('version.txt?' + Date.now(), {cache:'no-store'}).then(r => r.ok ? r.text() : '')).trim();
@@ -660,6 +660,9 @@ function build(data){
     // Sonnenscheindauer 8–20 Uhr (Stundenwerte gelten für die Stunde davor); nur Modelle, die sie liefern
     const sunV = acc.map(h=>h.sun).filter(v=>v!=null);
     const sunH = sunV.length >= acc.length - 2 ? sunV.reduce((a,b)=>a+b,0)/3600 : null;
+    // Sonnenstunden des ganzen Tages (Stundenwerte gelten für die Stunde davor: 1:00 … 24:00)
+    const sunF = hourly.slice(i0 + 1, i0 + 25).map(h => h.sun);
+    const sunDay = i0 >= 0 && sunF.filter(v => v != null).length >= 22 ? sunF.reduce((a,b) => a + (b||0), 0)/3600 : null;
     const sunM = avail.map(m => { const S = per[m.id].sunshine_duration; if(!S) return null; let x=0;
       for(let i=iS+1;i<=iE;i++){ if(S[i]==null) return null; x+=S[i]; } return x/3600; }).filter(v=>v!=null);
     const fullDay = {hours: full, tmin: fullT.length ? Math.min(...fullT) : tmin, tmax: fullT.length ? Math.max(...fullT) : tmax, pEarly, pLate};
@@ -693,7 +696,7 @@ function build(data){
       }
     }
     const cond = condition({cloud, psum, pprob, thunder, fog, temp: (tmax+tmin)/2, isDay:1});
-    return {d, di, tmax, tmin, psum, pprob, cloud, thunder, nightP, fullDay, byModel, sd, cond, minT, bucket:b, range, sunH, sunM};
+    return {d, di, tmax, tmin, psum, pprob, cloud, thunder, nightP, fullDay, byModel, sd, cond, minT, bucket:b, range, sunH, sunM, sunDay};
   }).filter(Boolean);
 
   const cur = hourly[nowIdx];
@@ -768,18 +771,27 @@ const inflCell = (v, max) => `<div class="infl"><span>${Math.round(v*100)} %</sp
 const shortName = m => m.id === WN.id ? 'WeatherNext' : m.name;
 const SUNUP = '<svg class="srs" viewBox="0 0 24 24" aria-label="Aufgang"><path d="M5 18a7 7 0 0 1 14 0" fill="#ffd23f"/><path d="M2 20h20" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M12 3v7M9 6l3-3 3 3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const SUNDOWN = '<svg class="srs" viewBox="0 0 24 24" aria-label="Untergang"><path d="M5 18a7 7 0 0 1 14 0" fill="#ff9a3c"/><path d="M2 20h20" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M12 10V3M9 7l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+// Sonnenstunden: erwartet gegenüber astronomisch möglich (Sonnenaufgang bis -untergang)
+function sunPossible(R, day, k){
+  if(!R.sun || !R.sun.rise[k] || day.sunDay == null) return '';
+  const max = (Date.parse(R.sun.set[k]) - Date.parse(R.sun.rise[k]))/3600e3, v = Math.min(day.sunDay, max);
+  const exp = v < 0.5 ? 'kaum Sonne' : `${Math.round(v)} h Sonne`;
+  return `${exp} von ${Math.round(max)} h möglichen`;
+}
 // Taupunkt (Magnus-Formel) und Luftdruck-Tendenz
 function dewTxt(c){
   if(c.temp == null || c.rh == null) return '';
   const a = 17.62, b = 243.12, g = Math.log(Math.max(c.rh, 1)/100) + a*c.temp/(b + c.temp), td = b*g/(a - g);
-  const feel = td >= 16 ? ' · schwül' : c.rh >= 93 ? ' · sehr feucht' : c.rh < 35 ? ' · trocken' : '';
-  return `Taupunkt ${r0(td)}°${feel}`;
+  const feel = td >= 16 ? 'schwül' : c.rh >= 93 ? 'sehr feucht' : c.rh < 35 ? 'trocken' : '';
+  return `Taupunkt ${r0(td)}°${feel ? '<br>' + feel : ''}`;
 }
 function presTxt(R){
   const a = R.hourly[R.nowIdx], b = R.hourly[R.nowIdx + 3];
   if(!a || !b || a.pres == null || b.pres == null) return '';
-  const d = b.pres - a.pres;
-  return Math.abs(d) < 1 ? 'gleichbleibend' : d > 0 ? (d >= 3 ? 'stark steigend · beständiger' : 'steigend · eher beständig') : (d <= -3 ? 'stark fallend · unbeständig' : 'fallend · wechselhafter');
+  const d = b.pres - a.pres, dd = (d > 0 ? '+' : '−') + Math.abs(Math.round(d)) + ' hPa in 3 h';
+  if(Math.abs(d) < 1) return 'gleichbleibend<br>keine Wetteränderung absehbar';
+  return d > 0 ? `steigt (${dd})<br>${d >= 3 ? 'Wetter beruhigt sich deutlich' : 'Wetter wird ruhiger'}`
+               : `fällt (${dd})<br>${d <= -3 ? 'Wetter wird deutlich unbeständiger' : 'Wetter wird wechselhafter'}`;
 }
 const sunHrs = h => h < 0.5 ? 'kaum Sonne' : `${Math.round(h)} h Sonne`;
 const DROPSYM = '<svg class="drop" viewBox="0 0 10 14" aria-hidden="true"><path d="M5 1C5 1 1 6.2 1 9a4 4 0 0 0 8 0C9 6.2 5 1 5 1z" fill="currentColor"/></svg>';
@@ -892,9 +904,9 @@ function render(place, R){
 
   <div class="grid">
     <div class="card"><h3>Gefühlt</h3><div class="tile"><div class="v">${r0(c.feels)}°</div><div class="s">${feelTxt(c)}</div></div></div>
-    <div class="card"><h3>Niederschlag ${afterWin?'morgen':'heute'}</h3><div class="tile"><div class="v">${fmt1(pDay)} mm</div><div class="s">ganzer Tag<br>8–20 Uhr: ${fmt1(pToday)} mm · ${Math.round((hlDay.pprob||0)*100)} %</div></div></div>
+    <div class="card"><h3>Niederschlag ${afterWin?'morgen':'heute'}</h3><div class="tile"><div class="v">${fmt1(pDay)} mm</div><div class="s">ganzer Tag<br><span style="white-space:nowrap">8–20 Uhr: ${fmt1(pToday)} mm</span> · <span style="white-space:nowrap">${Math.round((hlDay.pprob||0)*100)} %</span></div></div></div>
     <div class="card"><h3>Wind</h3><div class="tile"><div class="v">${r0(c.wind)} <span style="font-size:16px">km/h</span></div><div class="s">Böen bis ${r0(c.gust)} km/h</div></div></div>
-    <div class="card"><h3>Sonne</h3><div class="tile"><div class="v sunv">${sunRS}</div><div class="s">${hlDay.sunH != null ? `etwa ${sunHrs(hlDay.sunH)} ${afterWin ? 'morgen' : 'heute'}` : ''}</div></div></div>
+    <div class="card"><h3>Sonne</h3><div class="tile"><div class="v sunv">${sunRS}</div><div class="s">${sunPossible(R, hlDay, sd)}</div></div></div>
     <div class="card"><h3>Luftfeuchte</h3><div class="tile"><div class="v">${r0(c.rh)} %</div><div class="s">${dewTxt(c)}</div></div></div>
     <div class="card"><h3>Luftdruck</h3><div class="tile"><div class="v">${c.pres != null ? Math.round(c.pres) : '–'} <span style="font-size:16px">hPa</span></div><div class="s">${presTxt(R)}</div></div></div>
   </div>
