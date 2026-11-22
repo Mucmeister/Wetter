@@ -32,7 +32,7 @@ const BUCKETS = [{k:'d1', off:1, from:0, to:1, label:'0–1'}, {k:'d2', off:2, f
 const bucketFor = d => BUCKETS.find(b => d >= b.from && d <= b.to);
 
 const DEMO = location.hash === '#demo';
-const BUILD = '2026-11-22.2';   // bei jeder Änderung erhöhen (gleich wie version.txt)
+const BUILD = '2026-11-22.3';   // bei jeder Änderung erhöhen (gleich wie version.txt)
 // Neue Version automatisch laden, sobald die App wieder geöffnet wird
 async function checkUpdate(){
   try{ const v = (await fetch('version.txt?' + Date.now(), {cache:'no-store'}).then(r => r.ok ? r.text() : '')).trim();
@@ -764,6 +764,8 @@ function condition({cloud, psum, pprob, thunder, fog, temp, isDay, hourly}){
 function hourCond(h){ return condition({cloud:h.cloud, psum:h.prcp||0, pprob:h.pr||0, thunder:h.thunder, fog:h.fog, temp:h.temp, isDay:h.isDay, hourly:true}); }
 
 const SUNSYM = '<svg class="sunsym" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="3.2" fill="currentColor"/><g stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 1.2v1.6M8 13.2v1.6M1.2 8h1.6M13.2 8h1.6M3.2 3.2l1.1 1.1M11.7 11.7l1.1 1.1M3.2 12.8l1.1-1.1M11.7 4.3l1.1-1.1"/></g></svg>';
+const inflCell = (v, max) => `<div class="infl"><span>${Math.round(v*100)} %</span><i style="width:${Math.max(2, Math.round(v/max*22))}px"></i></div>`;
+const shortName = m => m.id === WN.id ? 'WeatherNext' : m.name;
 const sunHrs = h => h < 0.5 ? 'kaum Sonne' : `${Math.round(h)} Std. Sonne`;
 const DROPSYM = '<svg class="drop" viewBox="0 0 10 14" aria-hidden="true"><path d="M5 1C5 1 1 6.2 1 9a4 4 0 0 0 8 0C9 6.2 5 1 5 1z" fill="currentColor"/></svg>';
 const SUN = '#ffd23f', CLOUD='#fff', DARK='#c9d3df', DROP='#5ec2ff', MOONC='#e9eefc';
@@ -899,10 +901,10 @@ function render(place, R){
     ${trackBlock(R)}
     ${modelTable(R)}
     <div class="explain">
-      <p><b>Treffergenauigkeit:</b> So weit lag das Modell hier in den letzten 4 Wochen bei der Temperatur für den nächsten Tag im Schnitt daneben, nach der Ortskorrektur. Kleiner ist besser.</p>
-      <p><b>Einfluss:</b> Anteil des Modells an der Vorhersage. Für die ersten Tage rechnet die App aus, welche Mischung die Messungen der letzten 30 Tage am besten getroffen hätte, getrennt für Tag und Nacht. Das wird nur genutzt, wenn es an diesem Ort in den letzten 14 Tagen tatsächlich besser lag als die einfache Gewichtung. Ab Tag 6 gibt es dafür keine Prüfdaten; dann zählt das in Deutschland langfristig stärkste Modell, ECMWF AIFS, am meisten.</p>
-      <p><b>Tageswerte</b> gelten für 8–20 Uhr, damit nächtlicher Regen keinen sonnigen Tag verdirbt. Tippe auf einen Tag für den ganzen Tag, die Unsicherheit und alle Modelle.</p>
-      <p><b>Regen und Spannen</b> stammen aus ${Object.values(R.members).reduce((s,m)=>s+m.P.length,0)} leicht variierten Rechenläufen (Ensembles von Google, ECMWF und DWD) plus den Einzelmodellen.${R.ST && R.ST.elev!=null ? ` Ort auf ${Math.round(R.ST.elev)} m Höhe${R.ST.hilly? '; im bergigen Gelände zählen fein aufgelöste Modelle (ICON-D2, AROME) in den ersten Tagen mehr':''}.`:''}</p>
+      <p><b>Fehler:</b> So weit lag das Modell hier in den letzten 4 Wochen im Schnitt daneben (Temperatur für den nächsten Tag, nach Ortskorrektur).</p>
+      <p><b>Einfluss:</b> Anteil an unserer Vorhersage. In den ersten Tagen zählt die Mischung, die hier zuletzt am besten traf, getrennt für Tag und Nacht. Ab Tag 6 zählt vor allem ECMWF AIFS, langfristig das stärkste Modell für Deutschland.</p>
+      <p><b>Tageswerte</b> gelten für 8–20 Uhr. Tippe auf einen Tag für Details und alle Modelle.</p>
+      <p><b>Regenwahrscheinlichkeit und Spannen</b> stammen aus ${Object.values(R.members).reduce((s,m)=>s+m.P.length,0)} leicht variierten Rechenläufen von Google, ECMWF und DWD.${R.ST && R.ST.elev!=null ? ` Ort auf ${Math.round(R.ST.elev)} m Höhe${R.ST.hilly? '; im bergigen Gelände zählen fein aufgelöste Modelle (ICON-D2, AROME) in den ersten Tagen mehr':''}.`:''}</p>
       <p class="muted">Google WeatherNext liefert keine Archivdaten; es geht mit festem Anteil ein und erhält die durchschnittliche Ortskorrektur der anderen Modelle.</p>
     </div>
     </div>
@@ -946,17 +948,24 @@ function toggleHist(forceOpen){
 }
 function toggleHistBind(el, H){ el.querySelectorAll('[data-k]').forEach(b => b.onclick = ev => { ev.stopPropagation(); histK = +b.dataset.k; el.innerHTML = histDetail(H, histK); toggleHistBind(el, H); }); }
 function histChart(d){
-  const W = 300, Hh = 110, top = 8, bot = 22, all = [...d.obsH, ...d.ourH].filter(v => v != null);
+  const W = 300, Hh = 130, top = 8, bot = 22, all = [...d.obsH, ...d.ourH].filter(v => v != null);
   if(all.length < 10) return '';
-  const lo = Math.floor(Math.min(...all)) - 1, hi = Math.ceil(Math.max(...all)) + 1;
-  const x = h => 4 + h/23*(W-8), y = t => top + (hi - t)/(hi - lo)*(Hh - top - bot);
+  const lo0 = Math.min(...all), hi0 = Math.max(...all), stp = hi0 - lo0 <= 5 ? 1 : hi0 - lo0 <= 12 ? 2 : 5;
+  const lo = Math.floor((lo0 - .5)/stp)*stp, hi = Math.ceil((hi0 + .5)/stp)*stp;
+  const x = h => 24 + h/23*(W-28), y = t => top + (hi - t)/(hi - lo)*(Hh - top - bot);
   const line = (a, attrs) => { let p = '', pen = false; a.forEach((v,h) => { if(v == null){ pen = false; return; } p += (pen ? 'L' : 'M') + x(h).toFixed(1) + ' ' + y(v).toFixed(1); pen = true; }); return `<path d="${p}" fill="none" ${attrs}/>`; };
   const pmax = Math.max(1, ...d.obsP.filter(v => v != null));
   const bars = d.obsP.map((v,h) => v > 0.05 ? `<rect x="${(x(h)-4).toFixed(1)}" y="${(Hh-bot - v/pmax*22).toFixed(1)}" width="8" height="${(v/pmax*22).toFixed(1)}" rx="1.5" fill="#7cc4ff" opacity=".55"/>` : '').join('');
   const win = `<rect x="${x(WIN_START)}" y="${top}" width="${x(WIN_END)-x(WIN_START)}" height="${Hh-top-bot}" fill="rgba(243,238,228,.04)"/>`;
   const ticks = [[0,'0 Uhr','start'],[6,'6','middle'],[12,'12','middle'],[18,'18','middle'],[23,'24','end']].map(([h,t,a]) => `<text x="${x(h)}" y="${Hh-6}" text-anchor="${a}">${t}</text>`).join('');
-  const yl = [hi-1, lo+1].map(t => `<text x="${W-2}" y="${y(t)+3}" text-anchor="end">${t}°</text>`).join('');
-  return `<svg class="histchart" viewBox="0 0 ${W} ${Hh}">${win}${bars}${line(d.ourH, 'stroke="#d9b26f" stroke-width="2" stroke-dasharray="5 4"')}${line(d.obsH, 'stroke="#f3eee4" stroke-width="2.4" stroke-linejoin="round"')}${ticks}${yl}</svg>
+  // waagerechte Hilfslinien je ${stp}°, die 0-Grad-Linie hervorgehoben
+  let yl = '';
+  for(let t = lo; t <= hi + 1e-9; t += stp){
+    const z = Math.abs(t) < 1e-9;
+    yl += `<line x1="24" x2="${W-4}" y1="${y(t).toFixed(1)}" y2="${y(t).toFixed(1)}" stroke="${z ? '#9fd3ff' : 'rgba(243,238,228,.13)'}" stroke-width="${z ? 1.4 : 1}"${z ? '' : ' stroke-dasharray="2 3"'}/>`
+        + `<text x="20" y="${(y(t)+3).toFixed(1)}" text-anchor="end"${z ? ' style="fill:#9fd3ff"' : ''}>${t}°</text>`;
+  }
+  return `<svg class="histchart" viewBox="0 0 ${W} ${Hh}">${win}${yl}${bars}${line(d.ourH, 'stroke="#d9b26f" stroke-width="2" stroke-dasharray="5 4"')}${line(d.obsH, 'stroke="#f3eee4" stroke-width="2.4" stroke-linejoin="round"')}${ticks}</svg>
     <div class="histleg"><span><i class="m"></i>gemessen</span><span><i class="f"></i>unsere Vorhersage vom Vortag</span>${d.obsP.some(v => v > 0.05) ? '<span><i class="r"></i>Regen gemessen</span>' : ''}</div>`;
 }
 function histDetail(H, k){
@@ -970,18 +979,17 @@ function histDetail(H, k){
   const nm = id => (MODELS.find(m => m.id === id) || {name:id}).name;
   const err = m => Math.abs(m.tmax - o.tmax) + Math.abs(m.tmin - o.tmin);
   const best = d.models.length ? d.models.reduce((a,b) => err(b) < err(a) ? b : a) : null;
-  const rows = d.models.slice().sort((a,b) => err(a) - err(b)).map(m => `<div class="hrow${m === best ? ' best' : ''}"><div class="n">${nm(m.id)}</div><div>${r0(m.tmin)}°</div><div>${r0(m.tmax)}°</div><div>${m.rain == null ? '–' : fmt1(m.rain)}</div></div>`).join('');
+  const rows = d.models.slice().sort((a,b) => err(a) - err(b)).map(m => `<div class="hrow"><div class="n">${nm(m.id)}${m === best ? '<span class="tag best">am besten</span>' : ''}</div><div>${r0(m.tmin)}°</div><div>${r0(m.tmax)}°</div><div>${m.rain == null ? '–' : fmt1(m.rain)}</div></div>`).join('');
   const nav = `<div class="histnav">${k > 0 ? `<button data-k="${k-1}" aria-label="Tag davor">‹</button>` : '<span></span>'}<b>${fmtDay(d.d)}</b>${k < H.days.length-1 ? `<button data-k="${k+1}" aria-label="Tag danach">›</button>` : '<span></span>'}</div>`;
   return `${nav}
     ${histChart(d)}
-    <div class="dline">Gemessen 8–20 Uhr: ${r0(o.tmin)}° bis ${r0(o.tmax)}°, ${mm(o.rain)}</div>
-    <div class="dline">Vorhersage vom Vortag: ${r0(f.tmin)}° bis ${r0(f.tmax)}°, ${mm(f.rain)}</div>
-    <div class="dline"><span>Höchstwert ${dv(f.tmax, o.tmax)} · Tiefstwert ${dv(f.tmin, o.tmin)}${rainV ? ' · ' + rainV : ''}</span></div>
-    <div class="dsec">Die Modelle am Vortag (8–20 Uhr)</div>
-    <div class="hrow head"><div>Modell</div><div>Tief</div><div>Hoch</div><div>Regen mm</div></div>
+    <div class="dline">Unsere Vorhersage: Höchstwert ${dv(f.tmax, o.tmax)}, Tiefstwert ${dv(f.tmin, o.tmin)}${rainV ? ', ' + rainV : ''}.</div>
+    <div class="dsec">Vorhersagen vom Vortag (8–20 Uhr)</div>
+    <div class="hrow head"><div class="n"></div><div>Tief</div><div>Hoch</div><div>Regen mm</div></div>
     <div class="hrow obs"><div class="n">Gemessen</div><div>${r0(o.tmin)}°</div><div>${r0(o.tmax)}°</div><div>${o.rain == null ? '–' : fmt1(o.rain)}</div></div>
+    <div class="hrow cons"><div class="n">Unsere Vorhersage</div><div>${r0(f.tmin)}°</div><div>${r0(f.tmax)}°</div><div>${f.rain == null ? '–' : fmt1(f.rain)}</div></div>
     ${rows}
-    <div class="hint">Sortiert nach Treffsicherheit an diesem Tag. Messung: ${esc(st ? st.name : 'Wetterstation')}. Die Regenmenge gilt für den Punkt der Station, ein paar Kilometer weiter kann es bei Schauern anders gewesen sein.</div>`;
+    <div class="hint" style="margin-top:6px">Modelle sortiert nach Treffsicherheit an diesem Tag. Messung: ${esc(st ? st.name : 'Wetterstation')}; Regen gilt für den Punkt der Station.</div>`;
 }
 
 // Tagesdetail: Inhalt wird beim ersten Öffnen erzeugt
@@ -1002,11 +1010,10 @@ function dayDetail(d, i){
   const bar = (a,b) => `<div class="bar"><i style="left:${(a-lo)/sp*100}%;width:${Math.max((b-a)/sp*100,4)}%;background:linear-gradient(90deg,${tempColor(a)},${tempColor(b)})"></i></div>`;
   const maxShare = Math.max(...d.byModel.map(x=>x.share));
   const rows = d.byModel.slice().sort((a,b)=>b.share-a.share).map(x => `<div class="mrow">
-    <div class="n">${x.m.name}${x.m.ki?'<span class="tag ki">KI</span>':''}</div>
+    <div class="n">${shortName(x.m)}</div>
     <div class="r">${r0(x.tmin)}°</div>${bar(x.tmin,x.tmax)}<div>${r0(x.tmax)}°</div>
     <div class="r">${x.psum==null?'–':fmt1(x.psum)}</div>
-    <div class="infl"><i style="width:${Math.round(x.share/maxShare*26)}px"></i>${Math.round(x.share*100)}%</div></div>`).join('');
-  const ag = d.sd < 1.2 ? ['good','Die Modelle sind sich einig'] : d.sd < 2.5 ? ['mid','Die Modelle sind sich nicht ganz einig'] : ['bad','Die Modelle sind sich uneinig – Vorhersage unsicher'];
+    ${inflCell(x.share, maxShare)}</div>`).join('');
   return `
     <div class="dsec">Ganzer Tag (0–24 Uhr)</div>
     <div class="hours">${hrs}</div>
@@ -1014,12 +1021,11 @@ function dayDetail(d, i){
     <div class="dline">Regen <span style="white-space:nowrap">0–8 Uhr:</span> ${mm(F.pEarly)} · <span style="white-space:nowrap">8–20 Uhr:</span> ${mm(d.psum)} · <span style="white-space:nowrap">20–24 Uhr:</span> ${mm(F.pLate)}</div>
     ${d.sunH!=null ? `<div class="dline">Sonnenschein 8–20 Uhr: ${d.sunH<0.5 ? 'kaum' : 'etwa ' + Math.round(d.sunH) + ' Std.'}${d.sunM.length>=2 && Math.round(Math.max(...d.sunM)) > Math.round(Math.min(...d.sunM)) ? ` <span>· Modelle ${Math.round(Math.min(...d.sunM))}–${Math.round(Math.max(...d.sunM))} Std.</span>` : ''}</div>` : ''}
     ${certainty(d)}
-    <div class="dsec">Was die einzelnen Modelle sagen (8–20 Uhr)</div>
-    <div class="hint">Jede Zeile ist ein eigenes Wettermodell. <b>Einfluss</b> zeigt, wie stark es in die Vorhersage oben eingeht: Modelle, die hier zuletzt genauer lagen, zählen mehr.</div>
-    <span class="agree ${ag[0]}">${ag[1]} (±${fmt1(d.sd)}°)</span>
-    <div class="mrow head" style="margin-top:8px"><div>Modell</div><div class="r">Tief</div><div></div><div>Hoch</div><div class="r">Regen</div><div class="r">Einfluss</div></div>
+    <div class="dsec">Die einzelnen Modelle (8–20 Uhr)</div>
+    <div class="mrow head"><div></div><div class="r">Tief</div><div></div><div>Hoch</div><div class="r">Regen<br>mm</div><div>Einfluss</div></div>
+    <div class="mrow cons"><div class="n">Unsere Vorhersage</div><div class="r">${r0(d.tmin)}°</div>${bar(d.tmin,d.tmax)}<div>${r0(d.tmax)}°</div><div class="r">${fmt1(d.psum)}</div><div></div></div>
     ${rows}
-    <div class="mrow cons"><div class="n">Vorhersage gesamt</div><div class="r">${r0(d.tmin)}°</div>${bar(d.tmin,d.tmax)}<div>${r0(d.tmax)}°</div><div class="r">${fmt1(d.psum)}</div><div class="r">100%</div></div>`;
+    <div class="hint" style="margin-top:6px"><b>Einfluss:</b> wie stark das Modell in unsere Vorhersage eingeht. Wer hier zuletzt genauer lag, zählt mehr.</div>`;
 }
 
 // Regenbalken: nur sichtbar, wenn in den nächsten 2 Stunden laut Radar Regen fällt
@@ -1130,22 +1136,17 @@ function trackBlock(R){
   html += `</div>`;
   if(T){
     const leads = T.leads || [{lead:1, ours:T.ours, avg:T.avg}];
-    const mx = Math.max(...leads.map(l => Math.max(l.ours, l.avg)));
-    const lbl = L => L === 1 ? '1 Tag im Voraus' : `${L} Tage im Voraus`;
     const f1 = v => v.toLocaleString('de-DE', {minimumFractionDigits:1, maximumFractionDigits:1});
-    const gains = leads.map(l => Math.round((1 - l.ours/l.avg)*100));
-    html += `<div class="dsec" style="padding:0 16px">Trefferbilanz Temperatur · letzte ${T.days} Tage</div><div class="track">` +
-      leads.map(l => `<div class="tl">${lbl(l.lead)}</div>
-        <div class="trow us"><div>Diese Seite</div><div class="tb"><i style="width:${Math.round(l.ours/mx*100)}%"></i></div><div class="r">±${f1(l.ours)}°</div></div>
-        <div class="trow"><div>Durchschnitt der Modelle</div><div class="tb"><i style="width:${Math.round(l.avg/mx*100)}%"></i></div><div class="r">±${f1(l.avg)}°</div></div>`).join('') +
-      `</div><div class="explain" style="padding-top:2px">${Math.min(...gains) >= 5 ? `<b>${Math.min(...gains) === Math.max(...gains) ? gains[0] : Math.min(...gains) + '–' + Math.max(...gains)} % genauer</b> als der Durchschnitt der Modelle. ` : ''}Mittlere Abweichung der Temperatur, Stunde für Stunde (kürzer ist besser). Für jeden Tag wurde nur genutzt, was vorher bekannt war.</div>`;
+    html += `<div class="dsec" style="padding:0 16px">Trefferbilanz · letzte ${T.days} Tage</div><div class="track">
+      <div class="hrow head"><div class="n">Temperatur</div><div>Unsere</div><div>Modelle</div><div>besser</div></div>` +
+      leads.map(l => { const g = Math.round((1 - l.ours/l.avg)*100);
+        return `<div class="hrow"><div class="n">${l.lead === 1 ? '1 Tag' : l.lead + ' Tage'} im Voraus</div><div class="us">±${f1(l.ours)}°</div><div>±${f1(l.avg)}°</div><div class="${g > 0 ? 'plus' : ''}">${g > 0 ? g + ' %' : g === 0 ? 'gleich' : '–'}</div></div>`; }).join('');
     if(T.rain){
       const r = T.rain, bm = r.best && ALL_MODELS.find(m => m.id === r.best.id);
-      const rr = [['Diese Seite', r.ours, 'us'], [`Bestes Einzelmodell (${bm ? bm.name : '–'})`, r.best ? r.best.hits : 0, ''], ['Durchschnitt aller Modelle', r.avg, '']];
-      html += `<div class="dsec" style="padding:4px 16px 0">Trefferbilanz Regen · letzte ${r.days} Tage</div><div class="track">` +
-        rr.map(x => `<div class="trow ${x[2]}"><div>${x[0]}</div><div class="tb"><i style="width:${Math.round(x[1]/r.days*100)}%"></i></div><div class="r">${x[1]}/${r.days}</div></div>`).join('') +
-        `</div><div class="explain" style="padding-top:2px">An so vielen Tagen stimmte „Regen“ oder „trocken“ zwischen 8 und 20 Uhr (ab 0,5 mm). Länger ist besser.</div>`;
+      html += `<div class="hrow head" style="margin-top:10px"><div class="n">Regen ja/nein richtig</div><div>Unsere</div><div>Modelle</div><div>bestes</div></div>
+        <div class="hrow"><div class="n">Tage von ${r.days}${bm ? `<span class="sub">bestes: ${shortName(bm)}</span>` : ''}</div><div class="us">${r.ours}</div><div>${r.avg}</div><div>${r.best ? r.best.hits : '–'}</div></div>`;
     }
+    html += `</div><div class="explain" style="padding-top:4px">Temperatur: mittlere Abweichung Stunde für Stunde (kleiner ist besser). Regen: an wie vielen Tagen „Regen“ oder „trocken“ zwischen 8 und 20 Uhr stimmte (ab 0,5 mm). Für jeden Tag wurde nur genutzt, was vorher bekannt war.</div>`;
   }
   return html;
 }
@@ -1155,17 +1156,17 @@ function modelTable(R){
   const share = (bk, id) => { const tot = R.avail.reduce((s,x)=>s+g(bk, x.id),0); return g(bk, id)/tot; };
   const list = R.avail.slice().sort((a,b)=>share('d1',b.id)-share('d1',a.id));
   const mx = Math.max(...list.flatMap(m => [share('d1',m.id), share('d6',m.id)]));
-  const cell = (bk, m) => { const v = share(bk, m.id); return `<div class="infl"><i style="width:${Math.round(v/mx*30)}px"></i>${Math.round(v*100)}%</div>`; };
-  const G = 'style="grid-template-columns:minmax(0,1fr) 62px 62px 62px"';
+  const cell = (bk, m) => inflCell(share(bk, m.id), mx);
+  const G = 'style="grid-template-columns:minmax(0,1fr) 58px 58px 58px"';
   const rows = list.map(m => {
     const err = R.W.d1[m.id]?.src === 'skill' ? R.W.d1[m.id].maeT : null;
     return `<div class="mrow" ${G}>
-      <div class="n">${m.name}${m.ki?'<span class="tag ki">KI</span>':''}</div>
-      <div class="r">${err!=null? '±'+fmt1(err)+'°' : '<span class="muted">keine Daten</span>'}</div>
+      <div class="n">${shortName(m)}${m.ki?'<span class="tag ki">KI</span>':''}</div>
+      <div class="r">${err!=null? '±'+fmt1(err)+'°' : '<span class="muted">–</span>'}</div>
       ${cell('d1', m)}${cell('d6', m)}</div>`;
   }).join('');
   return `<div style="padding:4px 16px 0">
-    <div class="mrow head" ${G}><div>Modell</div><div class="r">Treffer&shy;genauigkeit</div><div class="r">Einfluss<br>1–2 Tage</div><div class="r">Einfluss<br>ab 6 Tage</div></div>
+    <div class="mrow head" ${G}><div>Modell</div><div class="r">Fehler</div><div>Einfluss<br>1–2 Tage</div><div>Einfluss<br>ab Tag 6</div></div>
     ${rows}</div>`;
 }
 
