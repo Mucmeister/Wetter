@@ -32,7 +32,7 @@ const BUCKETS = [{k:'d1', off:1, from:0, to:1, label:'0–1'}, {k:'d2', off:2, f
 const bucketFor = d => BUCKETS.find(b => d >= b.from && d <= b.to);
 
 const DEMO = location.hash === '#demo';
-const BUILD = '2026-11-22.6';   // bei jeder Änderung erhöhen (gleich wie version.txt)
+const BUILD = '2026-11-22.7';   // bei jeder Änderung erhöhen (gleich wie version.txt)
 // Neue Version automatisch laden, sobald die App wieder geöffnet wird
 async function checkUpdate(){
   try{ const v = (await fetch('version.txt?' + Date.now(), {cache:'no-store'}).then(r => r.ok ? r.text() : '')).trim();
@@ -86,7 +86,7 @@ function splitByModel(block, modelIds){
 }
 
 /* ================= Daten laden ================= */
-const HOURLY = 'sunshine_duration,temperature_2m,apparent_temperature,precipitation,weather_code,cloud_cover,wind_speed_10m,wind_gusts_10m,relative_humidity_2m,is_day';
+const HOURLY = 'sunshine_duration,pressure_msl,temperature_2m,apparent_temperature,precipitation,weather_code,cloud_cover,wind_speed_10m,wind_gusts_10m,relative_humidity_2m,is_day';
 const STATS_MIN = 360;          // Prüfung an Messwerten: alle 6 Stunden neu
 const PAST_DAYS = 46;           // so weit zurück werden alte Vorhersagen geholt
 const WINDOW_DAYS = 30;         // Lernfenster für Korrektur und Gewichte
@@ -548,7 +548,7 @@ function build(data){
     const isDay = (() => { for(const m of MODELS){ const v = per[m.id]?.is_day?.[i]; if(v!=null) return v; } const h=+t.slice(11,13); return h>=7&&h<18?1:0; })();
     return {t, i, temp, prcp, cloud, pr, isDay, thunder: wsum? th/wsum : 0, fog: wsum? fog/wsum:0,
       feels: blend('apparent_temperature', i, 't'), wind: blend('wind_speed_10m', i, 't'),
-      gust: blend('wind_gusts_10m', i, 't'), rh: blend('relative_humidity_2m', i, 't'), sun: blend('sunshine_duration', i, 't')};
+      gust: blend('wind_gusts_10m', i, 't'), rh: blend('relative_humidity_2m', i, 't'), sun: blend('sunshine_duration', i, 't'), pres: blend('pressure_msl', i, 'p')};
   });
 
   // Wahrscheinlichkeit für ≥thr mm Niederschlag im Stundenbereich [i0..i1] (Summe)
@@ -766,6 +766,21 @@ function hourCond(h){ return condition({cloud:h.cloud, psum:h.prcp||0, pprob:h.p
 const SUNSYM = '<svg class="sunsym" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="3.2" fill="currentColor"/><g stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 1.2v1.6M8 13.2v1.6M1.2 8h1.6M13.2 8h1.6M3.2 3.2l1.1 1.1M11.7 11.7l1.1 1.1M3.2 12.8l1.1-1.1M11.7 4.3l1.1-1.1"/></g></svg>';
 const inflCell = (v, max) => `<div class="infl"><span>${Math.round(v*100)} %</span><i style="width:${Math.max(2, Math.round(v/max*22))}px"></i></div>`;
 const shortName = m => m.id === WN.id ? 'WeatherNext' : m.name;
+const SUNUP = '<svg class="srs" viewBox="0 0 24 24" aria-label="Aufgang"><path d="M5 18a7 7 0 0 1 14 0" fill="#ffd23f"/><path d="M2 20h20" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M12 3v7M9 6l3-3 3 3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const SUNDOWN = '<svg class="srs" viewBox="0 0 24 24" aria-label="Untergang"><path d="M5 18a7 7 0 0 1 14 0" fill="#ff9a3c"/><path d="M2 20h20" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M12 10V3M9 7l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+// Taupunkt (Magnus-Formel) und Luftdruck-Tendenz
+function dewTxt(c){
+  if(c.temp == null || c.rh == null) return '';
+  const a = 17.62, b = 243.12, g = Math.log(Math.max(c.rh, 1)/100) + a*c.temp/(b + c.temp), td = b*g/(a - g);
+  const feel = td >= 16 ? ' · schwül' : c.rh >= 93 ? ' · sehr feucht' : c.rh < 35 ? ' · trocken' : '';
+  return `Taupunkt ${r0(td)}°${feel}`;
+}
+function presTxt(R){
+  const a = R.hourly[R.nowIdx], b = R.hourly[R.nowIdx + 3];
+  if(!a || !b || a.pres == null || b.pres == null) return '';
+  const d = b.pres - a.pres;
+  return Math.abs(d) < 1 ? 'gleichbleibend' : d > 0 ? (d >= 3 ? 'stark steigend · beständiger' : 'steigend · eher beständig') : (d <= -3 ? 'stark fallend · unbeständig' : 'fallend · wechselhafter');
+}
 const sunHrs = h => h < 0.5 ? 'kaum Sonne' : `${Math.round(h)} h Sonne`;
 const DROPSYM = '<svg class="drop" viewBox="0 0 10 14" aria-hidden="true"><path d="M5 1C5 1 1 6.2 1 9a4 4 0 0 0 8 0C9 6.2 5 1 5 1z" fill="currentColor"/></svg>';
 const SUN = '#ffd23f', CLOUD='#fff', DARK='#c9d3df', DROP='#5ec2ff', MOONC='#e9eefc';
@@ -843,7 +858,9 @@ function render(place, R){
 
   // Kacheln
   const wdir = '';
-  const sunTxt = R.sun ? `${R.sun.rise[0].slice(11,16)} / ${R.sun.set[0].slice(11,16)}` : '–';
+  const sd = afterWin && R.sun && R.sun.rise[1] ? 1 : 0;
+  const sunRS = R.sun ? `<span>${SUNUP}${R.sun.rise[sd].slice(11,16)}</span><span>${SUNDOWN}${R.sun.set[sd].slice(11,16)}</span>` : '–';
+  const pDay = (hlDay.fullDay ? (hlDay.fullDay.pEarly||0) + (hlDay.fullDay.pLate||0) : 0) + (hlDay.psum||0);
   const pToday = hlDay.psum;
 
   $('#app').innerHTML = `
@@ -875,9 +892,11 @@ function render(place, R){
 
   <div class="grid">
     <div class="card"><h3>Gefühlt</h3><div class="tile"><div class="v">${r0(c.feels)}°</div><div class="s">${feelTxt(c)}</div></div></div>
-    <div class="card"><h3>Niederschlag</h3><div class="tile"><div class="v">${fmt1(pToday)} mm</div><div class="s">${afterWin?'morgen':'heute'} 8–20 Uhr, ${Math.round((hlDay.pprob||0)*100)} % Wahrscheinlichkeit</div></div></div>
+    <div class="card"><h3>Niederschlag ${afterWin?'morgen':'heute'}</h3><div class="tile"><div class="v">${fmt1(pDay)} mm</div><div class="s">ganzer Tag<br>8–20 Uhr: ${fmt1(pToday)} mm · ${Math.round((hlDay.pprob||0)*100)} %</div></div></div>
     <div class="card"><h3>Wind</h3><div class="tile"><div class="v">${r0(c.wind)} <span style="font-size:16px">km/h</span></div><div class="s">Böen bis ${r0(c.gust)} km/h</div></div></div>
-    <div class="card"><h3>Sonne</h3><div class="tile"><div class="v" style="font-size:22px;margin-top:12px">${sunTxt}</div><div class="s">Aufgang / Untergang · Luftfeuchte ${r0(c.rh)} %</div></div></div>
+    <div class="card"><h3>Sonne</h3><div class="tile"><div class="v sunv">${sunRS}</div><div class="s">${hlDay.sunH != null ? `etwa ${sunHrs(hlDay.sunH)} ${afterWin ? 'morgen' : 'heute'}` : ''}</div></div></div>
+    <div class="card"><h3>Luftfeuchte</h3><div class="tile"><div class="v">${r0(c.rh)} %</div><div class="s">${dewTxt(c)}</div></div></div>
+    <div class="card"><h3>Luftdruck</h3><div class="tile"><div class="v">${c.pres != null ? Math.round(c.pres) : '–'} <span style="font-size:16px">hPa</span></div><div class="s">${presTxt(R)}</div></div></div>
   </div>
 
   <div class="card mapcard">
@@ -903,7 +922,7 @@ function render(place, R){
     ${modelTable(R)}
     <div class="explain">
       <p><b>Fehler:</b> So weit lag das Modell hier in den letzten 4 Wochen im Schnitt daneben (Temperatur für den nächsten Tag, nach Ortskorrektur).</p>
-      <p><b>Anteil:</b> wie stark das Modell in unsere Vorhersage eingeht. In den ersten Tagen zählt die Mischung, die hier zuletzt am besten traf, getrennt für Tag und Nacht. Ab Tag 6 zählt vor allem ECMWF AIFS, langfristig das stärkste Modell für Deutschland.</p>
+      <p><b>Anteil:</b> wie stark das Modell in die App-Prognose eingeht. In den ersten Tagen zählt die Mischung, die hier zuletzt am besten traf, getrennt für Tag und Nacht. Ab Tag 6 zählt vor allem ECMWF AIFS, langfristig das stärkste Modell für Deutschland.</p>
       <p><b>Tageswerte</b> gelten für 8–20 Uhr. Tippe auf einen Tag für Details und alle Modelle.</p>
       <p><b>Regenwahrscheinlichkeit und Spannen</b> stammen aus ${Object.values(R.members).reduce((s,m)=>s+m.P.length,0)} leicht variierten Rechenläufen von Google, ECMWF und DWD.${R.ST && R.ST.elev!=null ? ` Ort auf ${Math.round(R.ST.elev)} m Höhe${R.ST.hilly? '; im bergigen Gelände zählen fein aufgelöste Modelle (ICON-D2, AROME) in den ersten Tagen mehr':''}.`:''}</p>
       <p class="muted">Google WeatherNext liefert keine Archivdaten; es geht mit festem Anteil ein und erhält die durchschnittliche Ortskorrektur der anderen Modelle.</p>
@@ -949,25 +968,38 @@ function toggleHist(forceOpen){
 }
 function toggleHistBind(el, H){ el.querySelectorAll('[data-k]').forEach(b => b.onclick = ev => { ev.stopPropagation(); histK = +b.dataset.k; el.innerHTML = histDetail(H, histK); toggleHistBind(el, H); }); }
 function histChart(d){
-  const W = 300, Hh = 130, top = 8, bot = 22, all = [...d.obsH, ...d.ourH].filter(v => v != null);
+  const W = 300, L = 26, top = 14, Ht = 104, gap = 22, Hp = 34, all = [...d.obsH, ...d.ourH].filter(v => v != null);
   if(all.length < 10) return '';
+  const x = h => L + h/23*(W-L-4);
+  // Temperatur
   const lo0 = Math.min(...all), hi0 = Math.max(...all), stp = hi0 - lo0 <= 5 ? 1 : hi0 - lo0 <= 12 ? 2 : 5;
   const lo = Math.floor((lo0 - .5)/stp)*stp, hi = Math.ceil((hi0 + .5)/stp)*stp;
-  const x = h => 24 + h/23*(W-28), y = t => top + (hi - t)/(hi - lo)*(Hh - top - bot);
+  const y = t => top + (hi - t)/(hi - lo)*(Ht - top);
   const line = (a, attrs) => { let p = '', pen = false; a.forEach((v,h) => { if(v == null){ pen = false; return; } p += (pen ? 'L' : 'M') + x(h).toFixed(1) + ' ' + y(v).toFixed(1); pen = true; }); return `<path d="${p}" fill="none" ${attrs}/>`; };
-  const pmax = Math.max(1, ...d.obsP.filter(v => v != null));
-  const bars = d.obsP.map((v,h) => v > 0.05 ? `<rect x="${(x(h)-4).toFixed(1)}" y="${(Hh-bot - v/pmax*22).toFixed(1)}" width="8" height="${(v/pmax*22).toFixed(1)}" rx="1.5" fill="#7cc4ff" opacity=".55"/>` : '').join('');
-  const win = `<rect x="${x(WIN_START)}" y="${top}" width="${x(WIN_END)-x(WIN_START)}" height="${Hh-top-bot}" fill="rgba(243,238,228,.04)"/>`;
-  const ticks = [[0,'0 Uhr','start'],[6,'6','middle'],[12,'12','middle'],[18,'18','middle'],[23,'24','end']].map(([h,t,a]) => `<text x="${x(h)}" y="${Hh-6}" text-anchor="${a}">${t}</text>`).join('');
-  // waagerechte Hilfslinien je ${stp}°, die 0-Grad-Linie hervorgehoben
-  let yl = '';
+  let grid = '';
   for(let t = lo; t <= hi + 1e-9; t += stp){
     const z = Math.abs(t) < 1e-9;
-    yl += `<line x1="24" x2="${W-4}" y1="${y(t).toFixed(1)}" y2="${y(t).toFixed(1)}" stroke="${z ? '#9fd3ff' : 'rgba(243,238,228,.13)'}" stroke-width="${z ? 1.4 : 1}"${z ? '' : ' stroke-dasharray="2 3"'}/>`
-        + `<text x="20" y="${(y(t)+3).toFixed(1)}" text-anchor="end"${z ? ' style="fill:#9fd3ff"' : ''}>${t}°</text>`;
+    grid += `<line x1="${L}" x2="${W-4}" y1="${y(t).toFixed(1)}" y2="${y(t).toFixed(1)}" stroke="${z ? '#9fd3ff' : 'rgba(243,238,228,.13)'}" stroke-width="${z ? 1.4 : 1}"${z ? '' : ' stroke-dasharray="2 3"'}/>`
+          + `<text x="${L-4}" y="${(y(t)+3).toFixed(1)}" text-anchor="end"${z ? ' style="fill:#9fd3ff"' : ''}>${t}°</text>`;
   }
-  return `<svg class="histchart" viewBox="0 0 ${W} ${Hh}">${win}${yl}${bars}${line(d.ourH, 'stroke="#d9b26f" stroke-width="2" stroke-dasharray="5 4"')}${line(d.obsH, 'stroke="#f3eee4" stroke-width="2.4" stroke-linejoin="round"')}${ticks}</svg>
-    <div class="histleg"><span><i class="m"></i>gemessen</span><span><i class="f"></i>unsere Vorhersage vom Vortag</span>${d.obsP.some(v => v > 0.05) ? '<span><i class="r"></i>Regen gemessen</span>' : ''}</div>`;
+  // Niederschlag: eigener Bereich darunter, gleiche Zeitachse, eigene Skala in mm pro Stunde
+  const pv = [...d.obsP, ...d.ourP].filter(v => v != null), pm = Math.max(...pv, 0);
+  const wetDay = pm >= 0.05, p0 = Ht + gap, pTop = [0.5, 1, 2, 5, 10, 20, 50].find(v => v >= pm) || 50;
+  const yp = v => p0 + Hp - Math.min(1, v/pTop)*Hp;
+  let pgrid = '', pbars = '';
+  if(wetDay){
+    pgrid = [pTop, 0].map(v => `<line x1="${L}" x2="${W-4}" y1="${yp(v)}" y2="${yp(v)}" stroke="rgba(243,238,228,${v ? .13 : .25})"${v ? ' stroke-dasharray="2 3"' : ''}/><text x="${L-4}" y="${yp(v)+3}" text-anchor="end">${v.toLocaleString('de-DE')}</text>`).join('')
+          + `<text x="${L+2}" y="${p0-3}" class="wl">mm pro Stunde</text>`;
+    const bw = (W-L-4)/24*0.62;
+    pbars = d.obsP.map((v,h) => v > 0.05 ? `<rect x="${(x(h)-bw/2).toFixed(1)}" y="${yp(v).toFixed(1)}" width="${bw.toFixed(1)}" height="${(p0+Hp-yp(v)).toFixed(1)}" rx="1" fill="#7cc4ff"/>` : '').join('')
+          + d.ourP.map((v,h) => v > 0.05 ? `<rect x="${(x(h)-bw/2).toFixed(1)}" y="${yp(v).toFixed(1)}" width="${bw.toFixed(1)}" height="${(p0+Hp-yp(v)).toFixed(1)}" rx="1" fill="none" stroke="#d9b26f" stroke-width="1.2" stroke-dasharray="2 2"/>` : '').join('');
+  }
+  const Hb = wetDay ? p0 + Hp : Ht;
+  const win = `<rect x="${x(WIN_START)}" y="0" width="${x(WIN_END)-x(WIN_START)}" height="${Hb}" fill="rgba(243,238,228,.06)"/>`
+            + `<text x="${(x(WIN_START)+x(WIN_END))/2}" y="9" text-anchor="middle" class="wl">Tageswerte 8–20 Uhr</text>`;
+  const ticks = [[0,'0 Uhr','start'],[6,'6','middle'],[12,'12','middle'],[18,'18','middle'],[23,'24','end']].map(([h,t,a]) => `<text x="${x(h)}" y="${Hb+13}" text-anchor="${a}">${t}</text>`).join('');
+  return `<svg class="histchart" viewBox="0 0 ${W} ${Hb+16}">${win}${grid}${pgrid}${pbars}${line(d.ourH, 'stroke="#d9b26f" stroke-width="2" stroke-dasharray="5 4"')}${line(d.obsH, 'stroke="#f3eee4" stroke-width="2.4" stroke-linejoin="round"')}${ticks}</svg>
+    <div class="histleg"><span><i class="m"></i>gemessen</span><span><i class="f"></i>App-Prognose vom Vortag</span>${wetDay ? '<span><i class="r"></i>Niederschlag an der Wetterstation gemessen</span>' : '<span>kein Niederschlag</span>'}</div>`;
 }
 function histDetail(H, k){
   const d = H.days[k], o = d.o, f = d.f, st = state.res.ST.station;
@@ -976,21 +1008,25 @@ function histDetail(H, k){
   const wetO = o.rain != null && o.rain >= 0.5, wetF = f.rain != null && f.rain >= 0.5;
   const rainV = o.rain == null || f.rain == null ? '' : wetO === wetF ? (wetO ? 'Regen richtig vorhergesagt' : 'kein nennenswerter Regen, wie vorhergesagt')
     : wetO ? (f.rain >= 0.1 ? 'mehr Regen als vorhergesagt' : 'Regen nicht vorhergesagt')
-           : (o.rain >= 0.1 ? 'weniger Regen als vorhergesagt' : 'Regen vorhergesagt, blieb aber trocken');
+           : (o.rain >= 0.05 ? 'weniger Regen als vorhergesagt' : 'Regen vorhergesagt, blieb aber trocken');
   const nm = id => (MODELS.find(m => m.id === id) || {name:id}).name;
   const err = m => Math.abs(m.tmax - o.tmax) + Math.abs(m.tmin - o.tmin);
-  const best = d.models.length ? d.models.reduce((a,b) => err(b) < err(a) ? b : a) : null;
-  const rows = d.models.slice().sort((a,b) => err(a) - err(b)).map(m => `<div class="hrow"><div class="n">${nm(m.id)}${m === best ? '<span class="tag best">am besten</span>' : ''}</div><div>${r0(m.tmin)}°</div><div>${r0(m.tmax)}°</div><div>${m.rain == null ? '–' : fmt1(m.rain)}</div></div>`).join('');
+  // Platzierung nach Treffsicherheit (Abweichung bei Hoch + Tief), die App-Prognose zählt mit
+  // Platz = 1 + Anzahl der Vorhersagen, die echt besser lagen (gleich gute teilen sich den Platz)
+  const re = m => Math.abs(r0(m.tmax) - r0(o.tmax)) + Math.abs(r0(m.tmin) - r0(o.tmin));
+  const appM = {tmin:f.tmin, tmax:f.tmax}, pool = [appM, ...d.models];
+  const place = m => { const k = 1 + pool.filter(x => re(x) < re(m)).length; return k <= 3 ? `<i class="rank r${k}">${k}</i>` : '<i class="rank"></i>'; };
+  const rows = d.models.slice().sort((a,b) => re(a) - re(b) || err(a) - err(b)).map(m => `<div class="hrow"><div class="n">${place(m)}${nm(m.id)}</div><div>${r0(m.tmin)}°</div><div>${r0(m.tmax)}°</div><div>${m.rain == null ? '–' : fmt1(m.rain)}</div></div>`).join('');
   const nav = `<div class="histnav">${k > 0 ? `<button data-k="${k-1}" aria-label="Tag davor">‹</button>` : '<span></span>'}<b>${fmtDay(d.d)}</b>${k < H.days.length-1 ? `<button data-k="${k+1}" aria-label="Tag danach">›</button>` : '<span></span>'}</div>`;
   return `${nav}
     ${histChart(d)}
-    <div class="dline">Unsere Vorhersage: Höchstwert ${dv(f.tmax, o.tmax)}, Tiefstwert ${dv(f.tmin, o.tmin)}${rainV ? ', ' + rainV : ''}.</div>
+    <div class="dline">App-Prognose: Höchstwert ${dv(f.tmax, o.tmax)}, Tiefstwert ${dv(f.tmin, o.tmin)}${rainV ? ', ' + rainV : ''}.</div>
     <div class="dsec">Vorhersagen vom Vortag (8–20 Uhr)</div>
-    <div class="hrow head"><div class="n"></div><div>Tief</div><div>Hoch</div><div>Nieder&shy;schlag mm</div></div>
-    <div class="hrow obs"><div class="n">Gemessen</div><div>${r0(o.tmin)}°</div><div>${r0(o.tmax)}°</div><div>${o.rain == null ? '–' : fmt1(o.rain)}</div></div>
-    <div class="hrow cons"><div class="n">Unsere Vorhersage</div><div>${r0(f.tmin)}°</div><div>${r0(f.tmax)}°</div><div>${f.rain == null ? '–' : fmt1(f.rain)}</div></div>
+    <div class="hrow head"><div class="n"></div><div>Tief</div><div>Hoch</div><div>mm</div></div>
+    <div class="hrow obs"><div class="n"><i class="rank"></i>Gemessen</div><div>${r0(o.tmin)}°</div><div>${r0(o.tmax)}°</div><div>${o.rain == null ? '–' : fmt1(o.rain)}</div></div>
+    <div class="hrow cons"><div class="n">${place(appM)}App-Prognose</div><div>${r0(f.tmin)}°</div><div>${r0(f.tmax)}°</div><div>${f.rain == null ? '–' : fmt1(f.rain)}</div></div>
     ${rows}
-    <div class="hint" style="margin-top:6px">Modelle sortiert nach Treffsicherheit an diesem Tag. Messung: ${esc(st ? st.name : 'Wetterstation')}; Regen gilt für den Punkt der Station.</div>`;
+    <div class="hint" style="margin-top:6px"><i class="rank r1">1</i><i class="rank r2">2</i><i class="rank r3">3</i> Platz nach Treffsicherheit bei Hoch und Tief. An der Wetterstation gemessener Niederschlag (${esc(st ? st.name : 'Wetterstation')}).</div>`;
 }
 
 // Tagesdetail: Inhalt wird beim ersten Öffnen erzeugt
@@ -1025,9 +1061,9 @@ function dayDetail(d, i){
       ${d.sunH!=null ? `<div>Sonne</div><div>${d.sunH<0.5 ? 'kaum' : 'etwa ' + Math.round(d.sunH) + ' h'}${d.sunM.length>=2 && Math.round(Math.max(...d.sunM)) > Math.round(Math.min(...d.sunM)) ? ` <span>· Modelle ${Math.round(Math.min(...d.sunM))}–${Math.round(Math.max(...d.sunM))} h</span>` : ''}</div>` : ''}
     </div>
     ${certainty(d)}
-    <div class="dsec">Die Modelle und ihr Anteil an unserer Vorhersage (8–20 Uhr)</div>
-    <div class="mrow head"><div></div><div class="r">Tief</div><div></div><div>Hoch</div><div class="r">Nieder&shy;schlag mm</div><div>Anteil</div></div>
-    <div class="mrow cons"><div class="n">Unsere Vorhersage</div><div class="r">${r0(d.tmin)}°</div>${bar(d.tmin,d.tmax)}<div>${r0(d.tmax)}°</div><div class="r">${fmt1(d.psum)}</div><div></div></div>
+    <div class="dsec">Die Modelle und ihr Anteil an der App-Prognose (8–20 Uhr)</div>
+    <div class="mrow head"><div></div><div class="r">Tief</div><div></div><div>Hoch</div><div class="r">mm</div><div>Anteil</div></div>
+    <div class="mrow cons"><div class="n">App-Prognose</div><div class="r">${r0(d.tmin)}°</div>${bar(d.tmin,d.tmax)}<div>${r0(d.tmax)}°</div><div class="r">${fmt1(d.psum)}</div><div></div></div>
     ${rows}`;
 }
 
@@ -1041,14 +1077,20 @@ function rainChart(R){
   const W = 300, H = 70, L0 = 34, top = 8, bw = (W - L0)/fr.length;
   const mx = Math.max(...fr.map(f => f.mm*12)), top_ = [0.5, 1, 2, 5, 10, 20, 50].find(v => v >= mx) || 50;
   const y = v => H - Math.min(1, v/top_)*(H - top);
+  // Farbe nach Niederschlagsart: jetzt gemessen, später nach vorhergesagter Temperatur
+  const PCOL = {Regen:'#7fb8e6', Schnee:'#ff9fd6', Schneeregen:'#b49bff', Niederschlag:'#a9c3da', Graupel:'#ffd447', Hagel:'#ffa43d', 'gefrierender Regen':'#45e285'};
+  const used = new Set();
   const bars = fr.map((f,i) => { const v = f.mm*12; if(v <= 0) return ''; const h = Math.max(1.5, H - y(v));
-    return `<rect x="${(L0 + i*bw + 0.8).toFixed(1)}" y="${(H-h).toFixed(1)}" width="${(bw-1.6).toFixed(1)}" height="${h.toFixed(1)}" rx="1.2" fill="${f.ms > now ? '#7fb8e6' : '#a9d0f0'}"/>`; }).join('');
+    const P = f.ms <= now + 20*60e3 ? ptypeAt(R, R.nowIdx, true) : ptypeAt(R, R.nowIdx + Math.round((f.ms - now)/3600e3));
+    used.add(P.noun);
+    return `<rect x="${(L0 + i*bw + 0.8).toFixed(1)}" y="${(H-h).toFixed(1)}" width="${(bw-1.6).toFixed(1)}" height="${h.toFixed(1)}" rx="1.2" fill="${PCOL[P.noun] || '#7fb8e6'}"/>`; }).join('');
+  const kinds = [...used].filter(k => k !== 'Regen' || used.size > 1);
   const nf = v => v.toLocaleString('de-DE');
   const grid = [top_, top_/2].map(v => `<line x1="${L0}" x2="${W}" y1="${y(v)}" y2="${y(v)}" stroke="rgba(243,238,228,.14)" stroke-dasharray="2 3"/><text x="${L0-4}" y="${y(v)+3}" text-anchor="end">${nf(v)}</text>`).join('')
     + `<line x1="${L0}" x2="${W}" y1="${H-0.5}" y2="${H-0.5}" stroke="rgba(243,238,228,.25)"/><text x="${L0-4}" y="${H}" text-anchor="end">0</text>`;
   const word = mx < 2.5 ? 'leicht' : mx < 10 ? 'mäßig' : 'kräftig';           // Einteilung wie beim DWD
   const t = ms => new Date(ms).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'});
-  return `<div class="rain2h"><div class="rlab">Niederschlag laut Radar in mm pro Stunde · bis ${nf(Math.round(mx*10)/10)} mm/h (${word})</div><svg viewBox="0 0 ${W} ${H}">${grid}${bars}</svg>
+  return `<div class="rain2h"><div class="rlab">Niederschlag laut Radar in mm pro Stunde · bis ${nf(Math.round(mx*10)/10)} mm/h (${word})${kinds.length ? '<br>' + kinds.map(k => `<i class="pk" style="background:${PCOL[k]}"></i>${k}`).join(' ') : ''}</div><svg viewBox="0 0 ${W} ${H}">${grid}${bars}</svg>
     <div class="ax" style="padding-left:${(L0/W*100).toFixed(1)}%"><span>Jetzt</span><span>${t(now+30*60e3)}</span><span>${t(now+60*60e3)}</span><span>${t(now+90*60e3)}</span><span>${t(now+120*60e3)}</span></div></div>`;
 }
 
@@ -1147,12 +1189,12 @@ function trackBlock(R){
     const leads = T.leads || [{lead:1, ours:T.ours, avg:T.avg}];
     const f1 = v => v.toLocaleString('de-DE', {minimumFractionDigits:1, maximumFractionDigits:1});
     html += `<div class="dsec" style="padding:0 16px">Trefferbilanz · letzte ${T.days} Tage</div><div class="track">
-      <div class="hrow head"><div class="n">Temperatur</div><div>Unsere</div><div>Modelle</div><div>besser</div></div>` +
+      <div class="hrow head"><div class="n">Temperatur</div><div>App</div><div>Modelle</div><div>besser</div></div>` +
       leads.map(l => { const g = Math.round((1 - l.ours/l.avg)*100);
         return `<div class="hrow"><div class="n">${l.lead === 1 ? '1 Tag' : l.lead + ' Tage'} im Voraus</div><div class="us">±${f1(l.ours)}°</div><div>±${f1(l.avg)}°</div><div class="${g > 0 ? 'plus' : ''}">${g > 0 ? g + ' %' : g === 0 ? 'gleich' : '–'}</div></div>`; }).join('');
     if(T.rain){
       const r = T.rain, bm = r.best && ALL_MODELS.find(m => m.id === r.best.id);
-      html += `<div class="hrow head" style="margin-top:10px"><div class="n">Regen ja/nein richtig</div><div>Unsere</div><div>Modelle</div><div>bestes</div></div>
+      html += `<div class="hrow head" style="margin-top:10px"><div class="n">Regen ja/nein richtig</div><div>App</div><div>Modelle</div><div>bestes</div></div>
         <div class="hrow"><div class="n">Tage von ${r.days}${bm ? `<span class="sub">bestes: ${shortName(bm)}</span>` : ''}</div><div class="us">${r.ours}</div><div>${r.avg}</div><div>${r.best ? r.best.hits : '–'}</div></div>`;
     }
     html += `</div><div class="explain" style="padding-top:4px">Temperatur: mittlere Abweichung Stunde für Stunde (kleiner ist besser). Regen: an wie vielen Tagen „Regen“ oder „trocken“ zwischen 8 und 20 Uhr stimmte (ab 0,5 mm). Für jeden Tag wurde nur genutzt, was vorher bekannt war.</div>`;
@@ -1213,6 +1255,7 @@ function applyNowCond(){
   const R = state.res; if(!R || !R.cur) return;
   const hc = nowCond(R), el = document.querySelector('#hero .cond'); if(el) el.textContent = hc.txt;
   const ni = document.querySelector('.nowi'); if(ni) ni.innerHTML = icon(hc.k, hc.n);
+  const rc = document.querySelector('.rain2h'); if(rc){ const h = rainChart(R); if(h) rc.outerHTML = h; }
   const n = document.querySelector('.note'); if(n) n.innerHTML = makeSummary(R);
 }
 function makeSummary(R){

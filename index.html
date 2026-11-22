@@ -208,6 +208,15 @@ body{--fg:#f3eee4;--fg2:rgba(243,238,228,.72);--fg3:rgba(243,238,228,.5);--card:
 .histnav span{width:40px}
 .days svg.histchart{width:100%;height:auto;display:block;margin:4px 0 2px}
 .histchart text{font-size:9px;fill:rgba(243,238,228,.5)}
+.histchart text.wl{font-size:8.5px;fill:rgba(243,238,228,.55)}
+.rank{display:inline-block;width:16px;height:16px;border-radius:50%;font-style:normal;font-size:10px;font-weight:700;line-height:16px;text-align:center;margin-right:6px;vertical-align:1px;color:#1b2330}
+.rank.r1{background:#e8c25a}.rank.r2{background:#c9d1da}.rank.r3{background:#d39a6a}
+.hint .rank{margin-right:2px}
+.sunv{display:flex;flex-direction:column;gap:2px;font-size:20px!important;margin-top:8px!important}
+.sunv span{display:flex;align-items:center;gap:6px}
+.srs{width:22px;height:22px;color:var(--fg2);flex:none}
+.rain2h .pk{display:inline-block;width:10px;height:8px;border-radius:2px;margin:0 3px 0 6px;vertical-align:0}
+.rain2h .pk:first-child{margin-left:0}
 .histleg{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:11px;color:var(--fg2);margin-bottom:8px}
 .histleg i{display:inline-block;width:16px;height:0;border-top:2.4px solid #f3eee4;vertical-align:3px;margin-right:5px}
 .histleg i.f{border-top:2px dashed #d9b26f}
@@ -215,7 +224,7 @@ body{--fg:#f3eee4;--fg2:rgba(243,238,228,.72);--fg3:rgba(243,238,228,.5);--card:
 .hrow{display:grid;grid-template-columns:1fr 44px 44px 64px;gap:4px;font-size:13px;padding:5px 0;border-top:1px solid var(--line)}
 .hrow > div:not(.n){text-align:right;font-variant-numeric:tabular-nums}
 .hrow.head{font-size:11px;color:var(--fg3);border-top:0}
-.hrow .n{text-align:left}
+.hrow .n{text-align:left;display:flex;align-items:center}
 .hrow.obs{font-weight:700;color:var(--fg)}
 .days .pp .amt{display:block;font-size:10.5px;font-weight:500;color:var(--fg3);margin-top:1px;padding-left:9px}
 svg.drop,.hr svg.drop,.days svg.drop,.legend svg.drop{width:7px;height:10px;margin:0 2px 0 0;vertical-align:-1px;display:inline-block}
