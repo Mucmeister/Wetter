@@ -13,7 +13,7 @@
 <meta name="theme-color" content="#0d1a28">
 <meta name="format-detection" content="telephone=no">
 <title>Wetter – Modell-Konsens</title>
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob: https://tile.openstreetmap.org https://maps.dwd.de; connect-src 'self' https://raw.githubusercontent.com https://api.open-meteo.com https://ensemble-api.open-meteo.com https://previous-runs-api.open-meteo.com https://geocoding-api.open-meteo.com https://api.brightsky.dev https://api.bigdatacloud.net; worker-src 'self'; manifest-src 'self'; base-uri 'self'; form-action 'none'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob: https://tile.openstreetmap.org https://maps.dwd.de; connect-src 'self' https://raw.githubusercontent.com https://api.open-meteo.com https://ensemble-api.open-meteo.com https://previous-runs-api.open-meteo.com https://geocoding-api.open-meteo.com https://api.brightsky.dev https://api.bigdatacloud.net https://air-quality-api.open-meteo.com; worker-src 'self'; manifest-src 'self'; base-uri 'self'; form-action 'none'; object-src 'none'">
 <meta name="referrer" content="strict-origin-when-cross-origin">
 <link rel="stylesheet" href="vendor/fonts/fonts.css">
 <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
@@ -241,6 +241,13 @@ html{background:#0d1a28}
 .plegend{display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--fg2);flex-wrap:wrap}
 .plegend i{display:inline-block;width:16px;height:7px;border-radius:2px;margin-left:6px}
 .plegend i:first-child{margin-left:0}
+.alerts{padding:6px 16px}
+.al{display:flex;gap:12px;align-items:center;padding:7px 0;border-top:1px solid var(--line)}
+.al:first-child{border-top:0}
+.al svg{width:22px;height:22px;flex:none}
+.al b{display:block;font-size:14px;font-weight:600}
+.al span{display:block;font-size:12px;color:var(--fg2);margin-top:1px}
+.warr{width:22px;height:22px;margin-left:8px;vertical-align:-2px;color:var(--fg2)}
 .rain2h .rlab{font-size:11px;color:var(--fg3);margin-bottom:2px}
 .rain2h .ax{display:flex;justify-content:space-between;font-size:11px;color:var(--fg3);margin-top:2px}
 /* Warnungen */

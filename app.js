@@ -32,7 +32,7 @@ const BUCKETS = [{k:'d1', off:1, from:0, to:1, label:'0–1'}, {k:'d2', off:2, f
 const bucketFor = d => BUCKETS.find(b => d >= b.from && d <= b.to);
 
 const DEMO = location.hash === '#demo';
-const BUILD = '2026-11-22.11';   // bei jeder Änderung erhöhen (gleich wie version.txt)
+const BUILD = '2026-11-22.12';   // bei jeder Änderung erhöhen (gleich wie version.txt)
 // Neue Version automatisch laden, sobald die App wieder geöffnet wird
 async function checkUpdate(){
   try{ const v = (await fetch('version.txt?' + Date.now(), {cache:'no-store'}).then(r => r.ok ? r.text() : '')).trim();
@@ -86,7 +86,7 @@ function splitByModel(block, modelIds){
 }
 
 /* ================= Daten laden ================= */
-const HOURLY = 'sunshine_duration,pressure_msl,temperature_2m,apparent_temperature,precipitation,weather_code,cloud_cover,wind_speed_10m,wind_gusts_10m,relative_humidity_2m,is_day';
+const HOURLY = 'sunshine_duration,pressure_msl,wind_direction_10m,temperature_2m,apparent_temperature,precipitation,weather_code,cloud_cover,wind_speed_10m,wind_gusts_10m,relative_humidity_2m,is_day';
 const STATS_MIN = 360;          // Prüfung an Messwerten: alle 6 Stunden neu
 const PAST_DAYS = 46;           // so weit zurück werden alte Vorhersagen geholt
 const WINDOW_DAYS = 30;         // Lernfenster für Korrektur und Gewichte
@@ -527,6 +527,13 @@ function build(data){
     }
   }
 
+  // Windrichtung: Mittel als Vektor (sonst ergäbe 350° und 10° fälschlich 180°), gewichtet mit Windstärke und Modellanteil
+  function blendDir(i){
+    const b = bucketFor(leadDay(i)).k; let u = 0, v = 0, n = 0;
+    for(const m of avail){ const d = per[m.id].wind_direction_10m?.[i], sp = per[m.id].wind_speed_10m?.[i]; if(d == null || sp == null) continue;
+      const ww = W[b][m.id].t * Math.max(sp, 1); u += ww*Math.sin(d*Math.PI/180); v += ww*Math.cos(d*Math.PI/180); n++; }
+    return n ? (Math.atan2(u, v)*180/Math.PI + 360) % 360 : null;
+  }
   function blend(varName, i, kind){
     const b = bucketFor(leadDay(i)).k;
     let s=0, w=0;
@@ -548,7 +555,7 @@ function build(data){
     const isDay = (() => { for(const m of MODELS){ const v = per[m.id]?.is_day?.[i]; if(v!=null) return v; } const h=+t.slice(11,13); return h>=7&&h<18?1:0; })();
     return {t, i, temp, prcp, cloud, pr, isDay, thunder: wsum? th/wsum : 0, fog: wsum? fog/wsum:0,
       feels: blend('apparent_temperature', i, 't'), wind: blend('wind_speed_10m', i, 't'),
-      gust: blend('wind_gusts_10m', i, 't'), rh: blend('relative_humidity_2m', i, 't'), sun: blend('sunshine_duration', i, 't'), pres: blend('pressure_msl', i, 'p')};
+      gust: blend('wind_gusts_10m', i, 't'), rh: blend('relative_humidity_2m', i, 't'), sun: blend('sunshine_duration', i, 't'), pres: blend('pressure_msl', i, 'p'), wdir: blendDir(i)};
   });
 
   // Wahrscheinlichkeit für ≥thr mm Niederschlag im Stundenbereich [i0..i1] (Summe)
@@ -771,6 +778,10 @@ const inflCell = (v, max) => `<div class="infl"><span>${Math.round(v*100)} %</sp
 const shortName = m => m.id === WN.id ? 'WeatherNext' : m.name;
 const SUNUP = '<svg class="srs" viewBox="0 0 24 24" aria-label="Aufgang"><path d="M5 18a7 7 0 0 1 14 0" fill="#ffd23f"/><path d="M2 20h20" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M12 3v7M9 6l3-3 3 3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const SUNDOWN = '<svg class="srs" viewBox="0 0 24 24" aria-label="Untergang"><path d="M5 18a7 7 0 0 1 14 0" fill="#ff9a3c"/><path d="M2 20h20" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M12 10V3M9 7l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+// Windrichtung: Name (woher der Wind kommt) und Pfeil (wohin er weht)
+const DIRS = ['Nord','Nordost','Ost','Südost','Süd','Südwest','West','Nordwest'];
+const dirName = d => DIRS[Math.round(d/45) % 8];
+const windArrow = d => `<svg class="warr" viewBox="0 0 24 24" style="transform:rotate(${Math.round(d+180)}deg)" aria-hidden="true"><path d="M12 3v16M6 13l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" transform="rotate(180 12 12)"/></svg>`;
 // Sonnenstunden: erwartet gegenüber astronomisch möglich (Sonnenaufgang bis -untergang)
 function sunPossible(R, day, k){
   if(!R.sun || !R.sun.rise[k] || day.sunDay == null) return '';
@@ -896,6 +907,8 @@ function render(place, R){
     <div class="hours">${hrs}</div>
   </div>
 
+  ${alertsBlock(R, state.aq && state.aq.key === state.place.lat + ',' + state.place.lon ? state.aq.d : null)}
+
   <div class="card">
     <h3>${svgCal()} 10-Tage-Vorhersage · 8–20 Uhr</h3>
     <div class="legend">${DROPSYM} Regenwahrscheinlichkeit zwischen 8 und 20 Uhr</div>
@@ -905,7 +918,7 @@ function render(place, R){
   <div class="grid">
     <div class="card"><h3>Gefühlt</h3><div class="tile"><div class="v">${r0(c.feels)}°</div><div class="s">${feelTxt(c)}</div></div></div>
     <div class="card"><h3>Niederschlag ${afterWin?'morgen':'heute'}</h3><div class="tile"><div class="v">${fmt1(pDay)} mm</div><div class="s">ganzer Tag<br><span style="white-space:nowrap">8–20 Uhr: ${fmt1(pToday)} mm</span> · <span style="white-space:nowrap">${Math.round((hlDay.pprob||0)*100)} %</span></div></div></div>
-    <div class="card"><h3>Wind</h3><div class="tile"><div class="v">${r0(c.wind)} <span style="font-size:16px">km/h</span></div><div class="s">Böen bis ${r0(c.gust)} km/h</div></div></div>
+    <div class="card"><h3>Wind</h3><div class="tile"><div class="v">${r0(c.wind)} <span style="font-size:16px">km/h</span>${c.wdir != null && c.wind >= 2 ? windArrow(c.wdir) : ''}</div><div class="s">${c.wdir != null && c.wind >= 2 ? `aus ${dirName(c.wdir)}<br>` : ''}Böen bis ${r0(c.gust)} km/h</div></div></div>
     <div class="card"><h3>Sonne</h3><div class="tile"><div class="v sunv">${sunRS}</div><div class="s">${sunPossible(R, hlDay, sd)}</div></div></div>
     <div class="card"><h3>Luftfeuchte</h3><div class="tile"><div class="v">${r0(c.rh)} %</div><div class="s">${dewTxt(c)}</div></div></div>
     <div class="card"><h3>Luftdruck</h3><div class="tile"><div class="v">${c.pres != null ? Math.round(c.pres) : '–'} <span style="font-size:16px">hPa</span></div><div class="s">${presTxt(R)}</div></div></div>
@@ -1279,6 +1292,53 @@ function applyNowCond(){
   const rc = document.querySelector('.rain2h'); if(rc){ const h = rainChart(R); if(h) rc.outerHTML = h; }
   const n = document.querySelector('.note'); if(n) n.innerHTML = makeSummary(R);
 }
+// Kurze Hinweise, nur wenn sie zutreffen – keine Prosa
+function alertsBlock(R, AQ){
+  const out = [], H = R.hourly, i0 = R.nowIdx;
+  // Glätte und Frost in den nächsten 18 Stunden
+  const nx = H.slice(i0, i0 + 18).filter(h => h.temp != null);
+  const cold = nx.filter(h => h.temp <= 0.5);
+  if(cold.length){
+    const wetBefore = H.slice(Math.max(0, i0 - 6), i0 + 1).reduce((a,h) => a + (h.prcp||0), 0) >= 0.3;
+    const wetCold = cold.some(h => (h.prcp||0) >= 0.1 && h.pr >= 0.3);
+    const tmin = Math.min(...nx.map(h => h.temp)), first = cold[0].t.slice(11,13);
+    if(wetBefore || wetCold) out.push(['ice', first === R.hourly[i0].t.slice(11,13) ? 'Jetzt Glätte möglich' : `Glätte möglich ab etwa ${first} Uhr`, wetCold ? 'Schnee oder Regen bei Frost' : 'nasse Straßen gefrieren']);
+    else if(tmin <= -0.5) out.push(['frost', `Frost bis ${r0(tmin)}°`, `ab etwa ${first} Uhr`]);
+  }
+  if(AQ && AQ.hourly){
+    const A = AQ.hourly, t = A.time, today = R.days[0] && R.days[0].d;
+    const idx = t.map((x,k) => k).filter(k => t[k].slice(0,10) === today && +t[k].slice(11,13) >= 8 && +t[k].slice(11,13) <= 20);
+    const max = key => Math.max(0, ...idx.map(k => A[key] && A[key][k]).filter(v => v != null));
+    // Pollen (Körner/m³): erst ab „mittel“ zeigen, dann alle ab „gering“ nennen
+    const POL = [['alder_pollen','Erle',10,100],['birch_pollen','Birke',10,100],['grass_pollen','Gräser',10,50],['mugwort_pollen','Beifuß',5,30],['ragweed_pollen','Ambrosia',5,10],['olive_pollen','Olive',10,100]];
+    const lvl = (v, lo, hi) => v >= hi ? 3 : v >= lo ? 2 : v >= 1 ? 1 : 0;
+    const pl = POL.map(([k, n, lo, hi]) => ({n, l: lvl(max(k), lo, hi)})).filter(x => x.l > 0).sort((a,b) => b.l - a.l);
+    if(pl.some(x => x.l >= 2)) out.push(['pollen', 'Pollenflug ' + pl.filter(x => x.l >= 2).map(x => `${x.n} ${x.l === 3 ? 'hoch' : 'mittel'}`).join(', '), pl.some(x => x.l === 1) ? 'gering: ' + pl.filter(x => x.l === 1).map(x => x.n).join(', ') : 'tagsüber']);
+    // UV-Index ab 3
+    const uv = Math.round(max('uv_index'));
+    if(uv >= 3){
+      const hrs = idx.filter(k => A.uv_index[k] >= 3).map(k => +t[k].slice(11,13));
+      const word = uv >= 11 ? 'extrem' : uv >= 8 ? 'sehr hoch' : uv >= 6 ? 'hoch' : 'mäßig';
+      out.push(['uv', `UV-Index ${uv} (${word})`, hrs.length ? `Sonnenschutz etwa ${hrs[0]}–${hrs[hrs.length-1]+1} Uhr` : '']);
+    }
+    // Luftqualität: nur wenn schlecht (Europäischer Index ab 60)
+    const aqi = max('european_aqi');
+    if(aqi >= 60){
+      const sub = [['european_aqi_pm2_5','Feinstaub'],['european_aqi_pm10','Feinstaub'],['european_aqi_ozone','Ozon'],['european_aqi_nitrogen_dioxide','Stickstoffdioxid']]
+        .map(([k, n]) => ({n, v: max(k)})).sort((a,b) => b.v - a.v)[0];
+      out.push(['air', `Luftqualität ${aqi >= 80 ? 'sehr schlecht' : 'schlecht'}`, sub && sub.v ? `vor allem ${sub.n}` : '']);
+    }
+  }
+  if(!out.length) return '';
+  const IC = {ice:'#9fd3ff', frost:'#9fd3ff', pollen:'#e7c27e', uv:'#ffb347', air:'#c9a0ff'};
+  const SY = {
+    ice: '<path d="M12 3v18M4.2 7.5l15.6 9M4.2 16.5l15.6-9" stroke-width="2"/><path d="M9.5 4.5 12 6.5l2.5-2M9.5 19.5 12 17.5l2.5 2" stroke-width="1.6"/>',
+    frost: '<path d="M10 4a2 2 0 0 1 4 0v9.5a4 4 0 1 1-4 0z" stroke-width="2"/><path d="M12 9v7" stroke-width="2.4"/>',
+    pollen: '<circle cx="12" cy="12" r="2.2" stroke-width="2"/><circle cx="12" cy="5.8" r="2.6" stroke-width="1.8"/><circle cx="12" cy="18.2" r="2.6" stroke-width="1.8"/><circle cx="5.8" cy="12" r="2.6" stroke-width="1.8"/><circle cx="18.2" cy="12" r="2.6" stroke-width="1.8"/>',
+    uv: '<circle cx="12" cy="12" r="4.5" stroke-width="2"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8" stroke-width="2"/>',
+    air: '<path d="M3 9h11a3 3 0 1 0-3-3M3 13h15a3 3 0 1 1-3 3M3 17h7" stroke-width="2"/>'};
+  return `<div class="card alerts">${out.map(([k, a, b]) => `<div class="al"><svg viewBox="0 0 24 24" fill="none" stroke="${IC[k]}" stroke-linecap="round" stroke-linejoin="round">${SY[k]}</svg><div><b>${a}</b>${b ? `<span>${b}</span>` : ''}</div></div>`).join('')}</div>`;
+}
 function makeSummary(R){
   const c = R.cur, rest = R.hourly.slice(R.nowIdx, R.nowIdx+12);
   const rainH = rest.find(h => h.pr>=0.5 && h.prcp>=0.2);
@@ -1426,6 +1486,14 @@ const DEFAULT_PLACE = {name:'München', lat:48.137, lon:11.575};
 // Koordinaten auf ca. 1 km runden: genauer braucht es kein Wettermodell, und es gibt weniger über den Standort preis
 function setPlace(p){ p = {...p, lat: Math.round(p.lat*100)/100, lon: Math.round(p.lon*100)/100}; store.set('wx:place', p); state.place = p; load(); }
 
+// Pollen, UV und Luftqualität (CAMS über Open-Meteo); stündlich neu, Fehler sind egal
+async function loadAQ(p){
+  const key = p.lat + ',' + p.lon;
+  if(state.aq && state.aq.key === key && Date.now() - state.aq.t < 60*60e3) return false;
+  const v = 'uv_index,european_aqi,european_aqi_pm2_5,european_aqi_pm10,european_aqi_ozone,european_aqi_nitrogen_dioxide,alder_pollen,birch_pollen,grass_pollen,mugwort_pollen,olive_pollen,ragweed_pollen';
+  const d = await getJSON(`https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${p.lat}&longitude=${p.lon}&timezone=auto&hourly=${v}&forecast_days=2`, 10000);
+  state.aq = {key, t: Date.now(), d}; return true;
+}
 let loading = false, loadSeq = 0;
 async function load(force){
   const my = ++loadSeq; loading = true;
@@ -1457,6 +1525,7 @@ async function load(force){
       data.liveP ? data.liveP.then(L => patch(L)).catch(() => {}) : null,
       data.statsP ? data.statsP.then(N => { if(N) patch({stats: N}); }).catch(() => {}) : null,
       (radarEng && radarEng.place(), null),
+      loadAQ(p).then(ch => { if(ch && my === loadSeq && state.res && alertsBlock(state.res, state.aq.d)) patch({}); }).catch(() => {}),
     ]);
   }catch(e){
     if(my === loadSeq) $('#app').innerHTML = `<div class="hero"><div class="place">${esc(p.name)}</div></div><div class="err">Daten konnten nicht geladen werden: ${esc(e.message||e)}<br>Zum erneuten Versuch nach unten ziehen.</div>`;
