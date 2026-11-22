@@ -9,7 +9,7 @@ def get(u):
         except Exception as e: err=e; time.sleep(5)
     raise err
 out = {}
-vars_ = ['temperature_2m'] + [f'temperature_2m_previous_day{d}' for d in (1,2,3,4,5)] + ['precipitation','precipitation_previous_day1']
+vars_ = ['temperature_2m'] + [f'temperature_2m_previous_day{d}' for d in (1,2,3,4,5,6,7)] + ['precipitation','precipitation_previous_day1']
 for name,(la,lo) in PLACES.items():
     try:
         u = f'https://previous-runs-api.open-meteo.com/v1/forecast?latitude={la}&longitude={lo}&timezone=GMT&hourly={",".join(vars_)}&models={",".join(MODELS)}&past_days=92&forecast_days=1'
