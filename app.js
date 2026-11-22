@@ -32,7 +32,7 @@ const BUCKETS = [{k:'d1', off:1, from:0, to:1, label:'0–1'}, {k:'d2', off:2, f
 const bucketFor = d => BUCKETS.find(b => d >= b.from && d <= b.to);
 
 const DEMO = location.hash === '#demo';
-const BUILD = '2026-11-22.9';   // bei jeder Änderung erhöhen (gleich wie version.txt)
+const BUILD = '2026-11-22.10';   // bei jeder Änderung erhöhen (gleich wie version.txt)
 // Neue Version automatisch laden, sobald die App wieder geöffnet wird
 async function checkUpdate(){
   try{ const v = (await fetch('version.txt?' + Date.now(), {cache:'no-store'}).then(r => r.ok ? r.text() : '')).trim();
@@ -980,9 +980,9 @@ function toggleHist(forceOpen){
 }
 function toggleHistBind(el, H){ el.querySelectorAll('[data-k]').forEach(b => b.onclick = ev => { ev.stopPropagation(); histK = +b.dataset.k; el.innerHTML = histDetail(H, histK); toggleHistBind(el, H); }); }
 function histChart(d){
-  const W = 300, L = 26, top = 14, Ht = 104, gap = 22, Hp = 34, all = [...d.obsH, ...d.ourH].filter(v => v != null);
+  const W = 300, L = 26, Rr = 22, top = 14, Ht = 104, gap = 30, Hp = 34, all = [...d.obsH, ...d.ourH].filter(v => v != null);
   if(all.length < 10) return '';
-  const x = h => L + h/23*(W-L-4);
+  const x = h => L + h/23*(W-L-Rr);
   // Temperatur
   const lo0 = Math.min(...all), hi0 = Math.max(...all), stp = hi0 - lo0 <= 5 ? 1 : hi0 - lo0 <= 12 ? 2 : 5;
   const lo = Math.floor((lo0 - .5)/stp)*stp, hi = Math.ceil((hi0 + .5)/stp)*stp;
@@ -991,7 +991,7 @@ function histChart(d){
   let grid = '';
   for(let t = lo; t <= hi + 1e-9; t += stp){
     const z = Math.abs(t) < 1e-9;
-    grid += `<line x1="${L}" x2="${W-4}" y1="${y(t).toFixed(1)}" y2="${y(t).toFixed(1)}" stroke="${z ? '#9fd3ff' : 'rgba(243,238,228,.13)'}" stroke-width="${z ? 1.4 : 1}"${z ? '' : ' stroke-dasharray="2 3"'}/>`
+    grid += `<line x1="${L}" x2="${W-Rr}" y1="${y(t).toFixed(1)}" y2="${y(t).toFixed(1)}" stroke="${z ? '#9fd3ff' : 'rgba(243,238,228,.13)'}" stroke-width="${z ? 1.4 : 1}"${z ? '' : ' stroke-dasharray="2 3"'}/>`
           + `<text x="${L-4}" y="${(y(t)+3).toFixed(1)}" text-anchor="end"${z ? ' style="fill:#9fd3ff"' : ''}>${t}°</text>`;
   }
   // Niederschlag: eigener Bereich darunter, gleiche Zeitachse, eigene Skala in mm pro Stunde
@@ -1000,14 +1000,19 @@ function histChart(d){
   const yp = v => p0 + Hp - Math.min(1, v/pTop)*Hp;
   let pgrid = '', pbars = '';
   if(wetDay){
-    pgrid = [pTop, 0].map(v => `<line x1="${L}" x2="${W-4}" y1="${yp(v)}" y2="${yp(v)}" stroke="rgba(243,238,228,${v ? .13 : .25})"${v ? ' stroke-dasharray="2 3"' : ''}/><text x="${L-4}" y="${yp(v)+3}" text-anchor="end">${v.toLocaleString('de-DE')}</text>`).join('')
-          + `<text x="${L+2}" y="${p0-3}" class="wl">mm pro Stunde</text>`;
-    const bw = (W-L-4)/24*0.62;
+    // eigener, abgesetzter Bereich: Überschrift, Skala rechts (die Temperaturskala steht links)
+    pgrid = `<line x1="0" x2="${W}" y1="${Ht+10}" y2="${Ht+10}" stroke="rgba(243,238,228,.22)"/>`
+          + `<rect x="${L}" y="${p0}" width="${W-L-Rr}" height="${Hp}" fill="rgba(124,196,255,.06)"/>`
+          + `<text x="0" y="${p0-5}" class="ph">Niederschlag in mm/h</text>`
+          + [pTop, pTop/2].map(v => `<line x1="${L}" x2="${W-Rr}" y1="${yp(v)}" y2="${yp(v)}" stroke="rgba(124,196,255,.22)" stroke-dasharray="2 3"/><text x="${W-Rr+4}" y="${yp(v)+3}" class="pl">${v.toLocaleString('de-DE')}</text>`).join('')
+          + `<line x1="${L}" x2="${W-Rr}" y1="${yp(0)}" y2="${yp(0)}" stroke="rgba(243,238,228,.3)"/><text x="${W-Rr+4}" y="${yp(0)+3}" class="pl">0</text>`;
+    const bw = (W-L-Rr)/24*0.62;
     pbars = d.obsP.map((v,h) => v > 0.05 ? `<rect x="${(x(h)-bw/2).toFixed(1)}" y="${yp(v).toFixed(1)}" width="${bw.toFixed(1)}" height="${(p0+Hp-yp(v)).toFixed(1)}" rx="1" fill="#7cc4ff"/>` : '').join('')
           + d.ourP.map((v,h) => v > 0.05 ? `<rect x="${(x(h)-bw/2).toFixed(1)}" y="${yp(v).toFixed(1)}" width="${bw.toFixed(1)}" height="${(p0+Hp-yp(v)).toFixed(1)}" rx="1" fill="none" stroke="#d9b26f" stroke-width="1.2" stroke-dasharray="2 2"/>` : '').join('');
   }
   const Hb = wetDay ? p0 + Hp : Ht;
-  const win = `<rect x="${x(WIN_START)}" y="0" width="${x(WIN_END)-x(WIN_START)}" height="${Hb}" fill="rgba(243,238,228,.06)"/>`
+  const win = `<rect x="${x(WIN_START)}" y="0" width="${x(WIN_END)-x(WIN_START)}" height="${Ht}" fill="rgba(243,238,228,.06)"/>`
+            + (wetDay ? `<rect x="${x(WIN_START)}" y="${p0}" width="${x(WIN_END)-x(WIN_START)}" height="${Hp}" fill="rgba(243,238,228,.06)"/>` : '')
             + `<text x="${(x(WIN_START)+x(WIN_END))/2}" y="9" text-anchor="middle" class="wl">Tageswerte 8–20 Uhr</text>`;
   const ticks = [[0,'0 Uhr','start'],[6,'6','middle'],[12,'12','middle'],[18,'18','middle'],[23,'24','end']].map(([h,t,a]) => `<text x="${x(h)}" y="${Hb+13}" text-anchor="${a}">${t}</text>`).join('');
   return `<svg class="histchart" viewBox="0 0 ${W} ${Hb+16}">${win}${grid}${pgrid}${pbars}${line(d.ourH, 'stroke="#d9b26f" stroke-width="2" stroke-dasharray="5 4"')}${line(d.obsH, 'stroke="#f3eee4" stroke-width="2.4" stroke-linejoin="round"')}${ticks}</svg>
