@@ -24,9 +24,10 @@ const ENSEMBLES = [
   {id:'dwd_icon_seamless_eps',        name:'DWD ICON-EPS', ki:false},
 ];
 const WN = ENSEMBLES[0];
-// DWD MOSMIX: vom DWD statistisch an die Messstation angepasste Vorhersage (MOS) – geht mit festem Anteil ein
+// DWD MOSMIX: vom DWD statistisch an die Messstation angepasste Vorhersage (MOS). Solange es keine Prüfdaten gibt,
+// zählt sie wie ein durchschnittliches Modell (wie WeatherNext); mehr Gewicht erst, wenn das Archiv zeigt, dass sie besser trifft.
 const MOS = {id:'dwd_mosmix', name:'DWD MOSMIX', by:'DWD (MOS)', ki:false, prior:1, mos:true};
-const MOS_SHARE = {d1:0.20, d2:0.20, d4:0.15, d6:0.10};
+const MOS_SHARE = {d1:0.11, d2:0.11, d4:0.11, d6:0.10};
 const ALL_MODELS = [...MODELS, {id:WN.id, name:'Google WeatherNext', by:'Google DeepMind', ki:true, prior:WN.prior, ens:true}, MOS];
 
 // Vorlaufzeit-Klassen für die Gewichtung (Tage im Voraus)
@@ -35,7 +36,7 @@ const BUCKETS = [{k:'d1', off:1, from:0, to:1, label:'0–1'}, {k:'d2', off:2, f
 const bucketFor = d => BUCKETS.find(b => d >= b.from && d <= b.to);
 
 const DEMO = location.hash === '#demo';
-const BUILD = '2026-11-22.17';   // bei jeder Änderung erhöhen (gleich wie version.txt)
+const BUILD = '2026-11-22.18';   // bei jeder Änderung erhöhen (gleich wie version.txt)
 // Neue Version automatisch laden, sobald die App wieder geöffnet wird
 async function checkUpdate(){
   try{ const v = (await fetch('version.txt?' + Date.now(), {cache:'no-store'}).then(r => r.ok ? r.text() : '')).trim();
@@ -116,9 +117,11 @@ function urls(lat, lon){
 }
 
 // DWD-Radar am Ort (Bright Sky): letzte 30 Min. gemessen + 2 Std. Radar-Vorhersage, 5-Minuten-Schritte
+// Trend: Nimmt der Niederschlag in der Umgebung zu oder ab? (Vergleich jetzt gegen vor 30 Min., Fläche ±TREND_R km)
+const TREND_R = 15, TREND_K = 0;      // TREND_K = 0: aus (wird nach der Rückrechnung gesetzt)
 function loadRadar(lat, lon){
-  const from = new Date(Date.now() - 35*60e3).toISOString().slice(0,16), to = new Date(Date.now() + 125*60e3).toISOString().slice(0,16);
-  return getJSON(`https://api.brightsky.dev/radar?lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}&distance=2000&format=plain&date=${from}&last_date=${to}&tz=Etc/UTC`, 6000)
+  const from = new Date(Date.now() - 42*60e3).toISOString().slice(0,16), to = new Date(Date.now() + 125*60e3).toISOString().slice(0,16);
+  return getJSON(`https://api.brightsky.dev/radar?lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}&distance=${TREND_K ? TREND_R*1000 : 2000}&format=plain&date=${from}&last_date=${to}&tz=Etc/UTC`, 6000)
     .then(j => j && j.radar && j.radar.length ? j : null).catch(() => null);
 }
 
@@ -767,11 +770,20 @@ function nowcast(radar, offSec){
   const nowMs = Date.now();
   const frames = radar.radar.map(f => {
     const g = f.precipitation_5, at = (y,x) => (g[y] && g[y][x] != null) ? g[y][x] : null;
-    const c = at(cy, cx); let mx = 0;
+    const c = at(cy, cx); let mx = 0, sum = 0, n = 0;
     for(let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++){ const v = at(cy+dy, cx+dx); if(v!=null) mx = Math.max(mx, v); }
-    return {ms: Date.parse(f.timestamp), mm: c==null ? null : c/100, near: mx/100};
+    for(const row of g) for(const v of row) if(v != null){ sum += v; n++; }
+    return {ms: Date.parse(f.timestamp), mm: c==null ? null : c/100, near: mx/100, area: n ? sum/n*0.12 : null};
   }).filter(f => f.mm != null).sort((a,b) => a.ms - b.ms);
   if(frames.length < 6) return null;
+  // Ab- oder Zunahme der Fläche fortschreiben (nur wenn es in der Umgebung tatsächlich nass ist)
+  if(TREND_K){
+    const an = frames.filter(f => f.ms <= nowMs), a1 = an[an.length-1], a0 = a1 && an.find(f => Math.abs(f.ms - (a1.ms - 30*60e3)) < 3*60e3);
+    if(a1 && a0 && a1.area > 0.02 && a0.area > 0.02){
+      const g = (a1.area + 0.05)/(a0.area + 0.05);
+      for(const f of frames) if(f.ms > a1.ms){ const k = Math.min(2, Math.max(0.3, Math.pow(g, TREND_K*(f.ms - a1.ms)/(30*60e3)))); f.mm *= k; f.near *= k; f.trend = k; }
+    }
+  }
   const past = frames.filter(f => f.ms <= nowMs);
   const cur = past.length ? past[past.length-1] : frames[0];
   // aktuelle Stärke (mm/h): Regenbeginn sofort aus dem neuesten Bild,
@@ -1000,7 +1012,7 @@ function render(place, R){
       <p><b>Tageswerte</b> gelten für 8–20 Uhr. Tippe auf einen Tag für Details und alle Modelle.</p>
       <p><b>Regenwahrscheinlichkeit und Spannen</b> stammen aus ${Object.values(R.members).reduce((s,m)=>s+m.P.length,0)} leicht variierten Rechenläufen von Google, ECMWF und DWD.${R.ST && R.ST.elev!=null ? ` Ort auf ${Math.round(R.ST.elev)} m Höhe${R.ST.hilly? '; im bergigen Gelände zählen fein aufgelöste Modelle (ICON-D2, AROME) in den ersten Tagen mehr':''}.`:''}</p>
       <p class="muted">Google WeatherNext liefert keine Archivdaten; es geht mit festem Anteil ein und erhält die durchschnittliche Ortskorrektur der anderen Modelle.</p>
-      ${R.per[MOS.id] && R.mos ? `<p class="muted"><b>DWD MOSMIX</b> ist keine eigene Modellrechnung, sondern die vom Deutschen Wetterdienst statistisch an Messstationen angepasste Vorhersage (Station ${esc(umlaut(String(R.mos.src.name).toLowerCase().replace(/(^|[\s-])\S/g, c => c.toUpperCase())))}, ${fmt1(R.mos.src.dist)} km). Sie geht mit festem Anteil ein (15–20 %, ab Tag 6 10 %), weil es dafür noch keine Archivdaten zur Prüfung gibt.</p>` : ''}
+      ${R.per[MOS.id] && R.mos ? `<p class="muted"><b>DWD MOSMIX</b> ist keine eigene Modellrechnung, sondern die vom Deutschen Wetterdienst statistisch an Messstationen angepasste Vorhersage (Station ${esc(umlaut(String(R.mos.src.name).toLowerCase().replace(/(^|[\s-])\S/g, c => c.toUpperCase())))}, ${fmt1(R.mos.src.dist)} km). Für sie gibt es noch keine Archivdaten zur Prüfung; bis dahin zählt sie wie ein durchschnittliches Modell (rund 11 %).</p>` : ''}
     </div>
     </div>
   </div>
