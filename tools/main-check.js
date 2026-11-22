@@ -10,7 +10,7 @@ const { chromium } = require('playwright');
     await pg.goto('https://mucmeister.github.io/Wetter/?' + Date.now());
     await pg.waitForTimeout(20000);
     console.log(name, JSON.stringify(await pg.evaluate(() => ({note: document.querySelector('.note') && document.querySelector('.note').textContent, hg: state.hgType, own: mapLayers && mapLayers.ownOk,
-      useStack: state.res && state.res.ST && state.res.ST.useStack, hist: state.res && state.res.ST && state.res.ST.hist && state.res.ST.hist.days.map(x=>x.d), st: state.res && state.res.ST && state.res.ST.station, histRow: !!document.querySelector('.row.past')}))), errs.slice(0,5));
+      useStack: state.res && state.res.ST && state.res.ST.useStack, mos: state.res && !!state.res.per.dwd_mosmix && state.res.mos.src,  hist: state.res && state.res.ST && state.res.ST.hist && state.res.ST.hist.days.map(x=>x.d), st: state.res && state.res.ST && state.res.ST.station, histRow: !!document.querySelector('.row.past')}))), errs.slice(0,5));
     const c = await pg.$('.mapcard'); if(c) await c.screenshot({path:`out/map-${name.slice(0,6)}.png`});
     await pg.close();
   }
