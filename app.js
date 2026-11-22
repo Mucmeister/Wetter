@@ -36,7 +36,7 @@ const BUCKETS = [{k:'d1', off:1, from:0, to:1, label:'0–1'}, {k:'d2', off:2, f
 const bucketFor = d => BUCKETS.find(b => d >= b.from && d <= b.to);
 
 const DEMO = location.hash === '#demo';
-const BUILD = '2026-11-22.18';   // bei jeder Änderung erhöhen (gleich wie version.txt)
+const BUILD = '2026-11-22.19';   // bei jeder Änderung erhöhen (gleich wie version.txt)
 // Neue Version automatisch laden, sobald die App wieder geöffnet wird
 async function checkUpdate(){
   try{ const v = (await fetch('version.txt?' + Date.now(), {cache:'no-store'}).then(r => r.ok ? r.text() : '')).trim();
@@ -833,6 +833,11 @@ function hourCond(h){ return condition({cloud:h.cloud, psum:h.prcp||0, pprob:h.p
 const SUNSYM = '<svg class="sunsym" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="3.2" fill="currentColor"/><g stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 1.2v1.6M8 13.2v1.6M1.2 8h1.6M13.2 8h1.6M3.2 3.2l1.1 1.1M11.7 11.7l1.1 1.1M3.2 12.8l1.1-1.1M11.7 4.3l1.1-1.1"/></g></svg>';
 const inflCell = (v, max) => `<div class="infl"><span>${Math.round(v*100)} %</span><i style="width:${Math.max(2, Math.round(v/max*22))}px"></i></div>`;
 const shortName = m => m.id === WN.id ? 'WeatherNext' : m.name;
+// Herkunft in Alltagssprache, unter dem Modellnamen
+const ORIGIN = {ecmwf_ifs:'Europa', ecmwf_aifs025_single:'Europa · KI', dwd_icon_seamless:'Deutschland',
+  meteofrance_seamless:'Frankreich', ukmo_seamless:'Großbritannien', ncep_gfs_seamless:'USA', ncep_aigfs025:'USA · KI',
+  google_weathernext2_ensemble:'Google · KI', dwd_mosmix:'DWD-Stationsprognose'};
+const mLabel = m => `<span class="mn2">${shortName(m)}<small>${ORIGIN[m.id] || ''}</small></span>`;
 const SUNUP = '<svg class="srs" viewBox="0 0 24 24" aria-label="Aufgang"><path d="M5 18a7 7 0 0 1 14 0" fill="#ffd23f"/><path d="M2 20h20" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M12 3v7M9 6l3-3 3 3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const SUNDOWN = '<svg class="srs" viewBox="0 0 24 24" aria-label="Untergang"><path d="M5 18a7 7 0 0 1 14 0" fill="#ff9a3c"/><path d="M2 20h20" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M12 10V3M9 7l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 // Windrichtung: Name (woher der Wind kommt) und Pfeil (wohin er weht)
@@ -1112,7 +1117,7 @@ function histDetail(H, k){
   const cmp = (a, b) => re(a) - re(b) || rr(a) - rr(b) || err(a) - err(b);
   const appM = {tmin:f.tmin, tmax:f.tmax, rain:f.rain}, pool = [appM, ...d.models];
   const place = m => { const k = 1 + pool.filter(x => cmp(x, m) < 0).length; return k <= 3 ? `<i class="rank r${k}">${k}</i>` : '<i class="rank"></i>'; };
-  const rows = d.models.slice().sort((a,b) => cmp(a, b) || err(a) - err(b)).map(m => `<div class="hrow"><div class="n">${place(m)}${nm(m.id)}</div><div>${r0(m.tmin)}°</div><div>${r0(m.tmax)}°</div><div>${m.rain == null ? '–' : fmt1(m.rain)}</div></div>`).join('');
+  const rows = d.models.slice().sort((a,b) => cmp(a, b) || err(a) - err(b)).map(m => `<div class="hrow"><div class="n">${place(m)}${mLabel(MODELS.find(x => x.id === m.id) || {id:m.id, name:nm(m.id)})}</div><div>${r0(m.tmin)}°</div><div>${r0(m.tmax)}°</div><div>${m.rain == null ? '–' : fmt1(m.rain)}</div></div>`).join('');
   const nav = `<div class="histnav">${k > 0 ? `<button data-k="${k-1}" aria-label="Tag davor">‹</button>` : '<span></span>'}<b>${fmtDay(d.d)}</b>${k < H.days.length-1 ? `<button data-k="${k+1}" aria-label="Tag danach">›</button>` : '<span></span>'}</div>`;
   return `${nav}
     ${histChart(d)}
@@ -1143,7 +1148,7 @@ function dayDetail(d, i){
   const bar = (a,b) => `<div class="bar"><i style="left:${(a-lo)/sp*100}%;width:${Math.max((b-a)/sp*100,4)}%;background:linear-gradient(90deg,${tempColor(a)},${tempColor(b)})"></i></div>`;
   const maxShare = Math.max(...d.byModel.map(x=>x.share));
   const rows = d.byModel.slice().sort((a,b)=>b.share-a.share).map(x => `<div class="mrow">
-    <div class="n">${shortName(x.m)}</div>
+    <div class="n">${mLabel(x.m)}</div>
     <div class="r">${r0(x.tmin)}°</div>${bar(x.tmin,x.tmax)}<div>${r0(x.tmax)}°</div>
     <div class="r">${x.psum==null?'–':fmt1(x.psum)}</div>
     ${inflCell(x.share, maxShare)}</div>`).join('');
@@ -1308,7 +1313,7 @@ function modelTable(R){
   const rows = list.map(m => {
     const err = R.W.d1[m.id]?.src === 'skill' ? R.W.d1[m.id].maeT : null;
     return `<div class="mrow" ${G}>
-      <div class="n">${shortName(m)}${m.ki?'<span class="tag ki">KI</span>':''}</div>
+      <div class="n">${mLabel(m)}</div>
       <div class="r">${err!=null? '±'+fmt1(err)+'°' : '<span class="muted">–</span>'}</div>
       ${cell('d1', m)}${cell('d6', m)}</div>`;
   }).join('');
