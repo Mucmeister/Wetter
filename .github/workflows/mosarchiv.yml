@@ -1,0 +1,22 @@
+name: MOSMIX-Archiv
+# alle 6 Stunden die DWD-MOSMIX-Vorhersage für einige Orte sichern (für eine spätere ehrliche Prüfung)
+on:
+  schedule:
+    - cron: '41 */6 * * *'
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: mosarchiv
+jobs:
+  save:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - run: |
+          set +e
+          git clone -q --depth 1 -b mosarchiv "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" arch || (mkdir arch && cd arch && git init -q -b mosarchiv)
+          curl -s "https://raw.githubusercontent.com/${{ github.repository }}/main/tools/mos-archive.py" -o mos.py
+          python3 mos.py arch/data
+          cd arch && git add -A && git -c user.name=wetter-bot -c user.email=wetter-bot@users.noreply.github.com commit -qm "MOSMIX" && git push -q "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" HEAD:mosarchiv
+          exit 0

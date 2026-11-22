@@ -24,7 +24,10 @@ const ENSEMBLES = [
   {id:'dwd_icon_seamless_eps',        name:'DWD ICON-EPS', ki:false},
 ];
 const WN = ENSEMBLES[0];
-const ALL_MODELS = [...MODELS, {id:WN.id, name:'Google WeatherNext', by:'Google DeepMind', ki:true, prior:WN.prior, ens:true}];
+// DWD MOSMIX: vom DWD statistisch an die Messstation angepasste Vorhersage (MOS) – geht mit festem Anteil ein
+const MOS = {id:'dwd_mosmix', name:'DWD MOSMIX', by:'DWD (MOS)', ki:false, prior:1, mos:true};
+const MOS_SHARE = {d1:0.20, d2:0.20, d4:0.15, d6:0.10};
+const ALL_MODELS = [...MODELS, {id:WN.id, name:'Google WeatherNext', by:'Google DeepMind', ki:true, prior:WN.prior, ens:true}, MOS];
 
 // Vorlaufzeit-Klassen für die Gewichtung (Tage im Voraus)
 const BUCKETS = [{k:'d1', off:1, from:0, to:1, label:'0–1'}, {k:'d2', off:2, from:2, to:3, label:'2–3'},
@@ -32,7 +35,7 @@ const BUCKETS = [{k:'d1', off:1, from:0, to:1, label:'0–1'}, {k:'d2', off:2, f
 const bucketFor = d => BUCKETS.find(b => d >= b.from && d <= b.to);
 
 const DEMO = location.hash === '#demo';
-const BUILD = '2026-11-22.15';   // bei jeder Änderung erhöhen (gleich wie version.txt)
+const BUILD = '2026-11-22.16';   // bei jeder Änderung erhöhen (gleich wie version.txt)
 // Neue Version automatisch laden, sobald die App wieder geöffnet wird
 async function checkUpdate(){
   try{ const v = (await fetch('version.txt?' + Date.now(), {cache:'no-store'}).then(r => r.ok ? r.text() : '')).trim();
@@ -132,6 +135,22 @@ async function loadAll(lat, lon, force){
   const quick = await Promise.race([liveAll, new Promise(r => setTimeout(() => r(null), 2500))]);
   if(quick) return {...d0, ...quick};
   return {...d0, radar:null, alerts:null, current:null, lmuNow:null, liveP: liveAll};
+}
+// MOSMIX: nächstgelegene DWD-Vorhersagestation (max. 30 km, höchstens 150 m Höhenunterschied)
+async function loadMOS(lat, lon, elev){
+  const mk = `wxm:${lat.toFixed(2)},${lon.toFixed(2)}`, c = store.get(mk);
+  if(c && Date.now() - c.t < 30*60e3) return c.d;
+  const src = await getJSON(`https://api.brightsky.dev/sources?lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}&max_dist=30000`, 8000).catch(() => null);
+  const pick = src && (src.sources || []).filter(s => s.observation_type === 'forecast' && s.distance <= 30000 && (elev == null || s.height == null || Math.abs(s.height - elev) <= 150))
+                        .sort((a,b) => a.distance - b.distance)[0];
+  let d = null;
+  if(pick){
+    const from = new Date().toISOString().slice(0,10), to = new Date(Date.now() + 11*864e5).toISOString().slice(0,10);
+    const w = await getJSON(`https://api.brightsky.dev/weather?source_id=${pick.id}&date=${from}&last_date=${to}&tz=Etc/UTC`, 12000);
+    d = {src: {name: pick.station_name, dist: pick.distance/1000, h: pick.height}, w: (w.weather || []).map(x => [x.timestamp, x.temperature, x.precipitation, x.cloud_cover, x.wind_speed, x.wind_gust_speed, x.wind_direction, x.pressure_msl, x.sunshine, x.dew_point])};
+  }
+  try{ store.set(mk, {t: Date.now(), d}); }catch(e){}
+  return d;
 }
 async function loadAll2(lat, lon, force){
   const key = `wx:${lat.toFixed(2)},${lon.toFixed(2)}`, skey = `wxs:${lat.toFixed(2)},${lon.toFixed(2)}`;
@@ -267,9 +286,10 @@ function stackInto(W, D, S, i0, i1, keys){
     const ws = stackW(D, key, i0, i1, ms, (m, bin) => S[m.id][b.k].bias[bin]);
     if(!ws) continue;
     const cur = ms.map(m => W[b.k][m.id].t); ws[0] = mixW(ws[0], cur); ws[1] = mixW(ws[1], cur);
+    const rest = 1 - WN_SHARE - MOS_SHARE[b.k];
     for(const m of ALL_MODELS){ const e = W[b.k][m.id]; if(!e) continue;
       const j = ms.indexOf(m);
-      e.tw = j >= 0 ? [ws[0][j]*(1-WN_SHARE), ws[1][j]*(1-WN_SHARE)] : (m.id === WN.id ? [WN_SHARE, WN_SHARE] : [0, 0]); }
+      e.tw = j >= 0 ? [ws[0][j]*rest, ws[1][j]*rest] : m.id === WN.id ? [WN_SHARE, WN_SHARE] : m.mos ? [MOS_SHARE[b.k], MOS_SHARE[b.k]] : [0, 0]; }
   }
 }
 // Mischungsgewichte [Nacht[], Tag[]] für die Modelle ms (Summe je 1) oder null bei zu wenig Daten
@@ -321,9 +341,15 @@ function weightsFrom(S, hilly){
   }
   // Ab Tag 6: feste Gewichte nach langfristiger Treffsicherheit; Ortskorrektur aus 4–5 Tagen, abgeschwächt
   for(const m of ALL_MODELS){
+    if(m.mos) continue;
     const e = W.d6[m.id], b4 = W.d4[m.id] && W.d4[m.id].bias;
     W.d6[m.id] = {...e, t: LONG_W[m.id] ?? 0.03, src: e.src === 'skill' ? 'skill' : e.src, long: true,
                   bias: b4 ? b4.map(v => v*0.7) : e.bias};
+  }
+  for(const b of BUCKETS){
+    const sh = MOS_SHARE[b.k], others = ALL_MODELS.filter(m => !m.mos);
+    const st = others.reduce((a,m) => a + W[b.k][m.id].t, 0), sp = others.reduce((a,m) => a + W[b.k][m.id].p, 0);
+    W[b.k][MOS.id] = {t: st*sh/(1-sh), p: sp*sh/(1-sh), src:'mos', bias: new Array(BINS).fill(0)};
   }
   return W;
 }
@@ -502,6 +528,21 @@ function build(data){
     };
   }
 
+  // MOSMIX auf die Zeitachse der Vorhersage legen (Höhenunterschied zur Station mit 0,65 °C/100 m ausgleichen)
+  if(data.mos && data.mos.w && data.mos.w.length){
+    const ix = {}; time.forEach((t,i) => ix[t] = i);
+    const n = time.length, A = () => new Array(n).fill(null);
+    const M = {temperature_2m:A(), precipitation:A(), cloud_cover:A(), wind_speed_10m:A(), wind_gusts_10m:A(), wind_direction_10m:A(), pressure_msl:A(), sunshine_duration:A(), relative_humidity_2m:A()};
+    const dz = fc.elevation != null && data.mos.src.h != null ? (data.mos.src.h - fc.elevation)*0.0065 : 0;
+    for(const [ts, T, P, C, WS, G, WD, PR, SU, TD] of data.mos.w){
+      const i = ix[new Date(Date.parse(ts) + off*1000).toISOString().slice(0,16)]; if(i == null) continue;
+      if(T != null) M.temperature_2m[i] = T + dz;
+      M.precipitation[i] = P; M.cloud_cover[i] = C; M.wind_speed_10m[i] = WS; M.wind_gusts_10m[i] = G; M.wind_direction_10m[i] = WD; M.pressure_msl[i] = PR;
+      M.sunshine_duration[i] = SU == null ? null : SU*60;
+      if(T != null && TD != null){ const f = t => Math.exp(17.62*t/(243.12+t)); M.relative_humidity_2m[i] = Math.min(100, 100*f(TD)/f(T)); }
+    }
+    if(M.temperature_2m.filter(v => v != null).length >= 48) per[MOS.id] = M;
+  }
   const ST = data.stats || null;
   const W = ST && ST.W ? ST.W : weightsFrom({}, false);
   const avail = ALL_MODELS.filter(m => per[m.id] && per[m.id].temperature_2m && per[m.id].temperature_2m.some(v=>v!=null));
@@ -712,7 +753,7 @@ function build(data){
   for(const m of MODELS){ const D = dailyPer[m.id]; if(D && D.sunrise && D.sunrise[0]){ sun = {rise:D.sunrise, set:D.sunset}; break; } }
   if(!sun && fc.daily && fc.daily.sunrise) sun = {rise: fc.daily.sunrise, set: fc.daily.sunset};
 
-  return {hourly, days, cur, nowIdx, W, ST, avail, per, members, sun, now, meta:fc, NC, curObs, gauge, alerts: data.alerts};
+  return {hourly, days, cur, nowIdx, W, ST, avail, per, members, sun, now, meta:fc, NC, curObs, gauge, alerts: data.alerts, mos: data.mos};
 }
 
 // Radar auswerten: Werte in 0,01 mm je 5 Min.; Ort = latlon_position im Raster, dazu Nachbarschaft ±1 Pixel
@@ -955,6 +996,7 @@ function render(place, R){
       <p><b>Tageswerte</b> gelten für 8–20 Uhr. Tippe auf einen Tag für Details und alle Modelle.</p>
       <p><b>Regenwahrscheinlichkeit und Spannen</b> stammen aus ${Object.values(R.members).reduce((s,m)=>s+m.P.length,0)} leicht variierten Rechenläufen von Google, ECMWF und DWD.${R.ST && R.ST.elev!=null ? ` Ort auf ${Math.round(R.ST.elev)} m Höhe${R.ST.hilly? '; im bergigen Gelände zählen fein aufgelöste Modelle (ICON-D2, AROME) in den ersten Tagen mehr':''}.`:''}</p>
       <p class="muted">Google WeatherNext liefert keine Archivdaten; es geht mit festem Anteil ein und erhält die durchschnittliche Ortskorrektur der anderen Modelle.</p>
+      ${R.per[MOS.id] && R.mos ? `<p class="muted"><b>DWD MOSMIX</b> ist keine eigene Modellrechnung, sondern die vom Deutschen Wetterdienst statistisch an Messstationen angepasste Vorhersage (Station ${esc(umlaut(String(R.mos.src.name).toLowerCase().replace(/(^|[\s-])\S/g, c => c.toUpperCase())))}, ${fmt1(R.mos.src.dist)} km). Sie geht mit festem Anteil ein (15–20 %, ab Tag 6 10 %), weil es dafür noch keine Archivdaten zur Prüfung gibt.</p>` : ''}
     </div>
     </div>
   </div>
@@ -1365,7 +1407,7 @@ function makeSummary(R){
   else if(dry) s = 'In den nächsten 12 Stunden trocken';
   else s = ptypeAt(R, R.nowIdx + 3).noun === 'Schnee' ? 'Vereinzelt Schneeschauer möglich' : 'Vereinzelt Schauer möglich';
   const tm = R.days[1];
-  if(tm){ const t = tm.cond.txt, noun = /^(Regen|Schnee|Gewitter|Nebel|Starker|Leichter|Schauer|Schneeschauer)/.test(t);
+  if(tm){ const t = tm.cond.txt, noun = /^(Regen|Schnee|Gewitter|Nebel|Schauer|Schneeschauer|Schneeregen|Graupel|Hagel)/.test(t);
     s += `. Morgen tagsüber ${tm.tmin < -0.5 ? `${r0(tm.tmin)}° bis ${r0(tm.tmax)}°` : `${r0(tm.tmin)}–${r0(tm.tmax)}°`}, ${noun ? t : t.charAt(0).toLowerCase() + t.slice(1)}`; }
   const g = R.hourly.slice(R.nowIdx, R.nowIdx+24).reduce((m,h)=>Math.max(m,h.gust||0),0);
   if(g >= 60) s += `. Sturmböen bis ${r0(g)} km/h`;
@@ -1507,6 +1549,7 @@ async function load(force){
   try{
     const data = await loadAll(p.lat, p.lon, force);
     if(my !== loadSeq) return;                      // inzwischen wurde ein anderer Ort gewählt
+    { const mc = store.get(`wxm:${p.lat.toFixed(2)},${p.lon.toFixed(2)}`); if(mc && mc.d && Date.now() - mc.t < 30*60e3) data.mos = mc.d; }
     state.fetched = Date.now();
     const show = d => {
       state.warn = '';
@@ -1529,6 +1572,7 @@ async function load(force){
       data.liveP ? data.liveP.then(L => patch(L)).catch(() => {}) : null,
       data.statsP ? data.statsP.then(N => { if(N) patch({stats: N}); }).catch(() => {}) : null,
       (radarEng && radarEng.place(), null),
+      data.mos ? null : loadMOS(p.lat, p.lon, data.fc && data.fc.elevation).then(M => { if(M && my === loadSeq) patch({mos: M}); }).catch(() => {}),
       loadAQ(p).then(ch => { if(ch && my === loadSeq && state.res && alertsBlock(state.res, state.aq.d)) patch({}); }).catch(() => {}),
     ]);
   }catch(e){
