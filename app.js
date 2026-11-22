@@ -32,7 +32,7 @@ const BUCKETS = [{k:'d1', off:1, from:0, to:1, label:'0–1'}, {k:'d2', off:2, f
 const bucketFor = d => BUCKETS.find(b => d >= b.from && d <= b.to);
 
 const DEMO = location.hash === '#demo';
-const BUILD = '2026-11-22.3';   // bei jeder Änderung erhöhen (gleich wie version.txt)
+const BUILD = '2026-11-22.4';   // bei jeder Änderung erhöhen (gleich wie version.txt)
 // Neue Version automatisch laden, sobald die App wieder geöffnet wird
 async function checkUpdate(){
   try{ const v = (await fetch('version.txt?' + Date.now(), {cache:'no-store'}).then(r => r.ok ? r.text() : '')).trim();
@@ -766,7 +766,7 @@ function hourCond(h){ return condition({cloud:h.cloud, psum:h.prcp||0, pprob:h.p
 const SUNSYM = '<svg class="sunsym" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="3.2" fill="currentColor"/><g stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 1.2v1.6M8 13.2v1.6M1.2 8h1.6M13.2 8h1.6M3.2 3.2l1.1 1.1M11.7 11.7l1.1 1.1M3.2 12.8l1.1-1.1M11.7 4.3l1.1-1.1"/></g></svg>';
 const inflCell = (v, max) => `<div class="infl"><span>${Math.round(v*100)} %</span><i style="width:${Math.max(2, Math.round(v/max*22))}px"></i></div>`;
 const shortName = m => m.id === WN.id ? 'WeatherNext' : m.name;
-const sunHrs = h => h < 0.5 ? 'kaum Sonne' : `${Math.round(h)} Std. Sonne`;
+const sunHrs = h => h < 0.5 ? 'kaum Sonne' : `${Math.round(h)} h Sonne`;
 const DROPSYM = '<svg class="drop" viewBox="0 0 10 14" aria-hidden="true"><path d="M5 1C5 1 1 6.2 1 9a4 4 0 0 0 8 0C9 6.2 5 1 5 1z" fill="currentColor"/></svg>';
 const SUN = '#ffd23f', CLOUD='#fff', DARK='#c9d3df', DROP='#5ec2ff', MOONC='#e9eefc';
 function icon(k, n){
@@ -887,6 +887,7 @@ function render(place, R){
     <div class="mapbar">
       <button class="chip on" data-l="radar">Radar</button>
       <button class="chip" data-l="warn">DWD-Warnungen</button>
+      <span class="plegend"><i style="background:linear-gradient(90deg,#62d6ff,#1466c8)"></i>Regen <i style="background:linear-gradient(90deg,#ffb0de,#cc2f93)"></i>Schnee <i style="background:linear-gradient(90deg,#d3c2ff,#6340c9)"></i>Schneeregen</span>
       <span style="margin-left:auto">Radar: DWD (nur Deutschland) · Karte © <a href="https://www.openstreetmap.org/copyright" style="color:inherit">OpenStreetMap</a></span>
     </div>
   </div>
@@ -896,13 +897,13 @@ function render(place, R){
     <div class="teaser">${teaser(R)}</div>
     <div class="foldbody">
     <div class="explain">
-      <p>Statt einem Wettermodell zu vertrauen, kombiniert diese Seite <b>${R.avail.length} Modelle</b> großer Wetterdienste, darunter drei KI-Modelle. Jedes Modell wird laufend mit echten Messwerten verglichen: Wer an diesem Ort zuletzt besser lag, bekommt mehr <b>Einfluss</b>, und typische Fehler werden herausgerechnet.</p>
+      <p>Statt einem Wettermodell zu vertrauen, kombiniert diese Seite <b>${R.avail.length} Modelle</b> großer Wetterdienste, darunter drei KI-Modelle. Jedes Modell wird laufend mit echten Messwerten verglichen: Wer an diesem Ort zuletzt besser lag, bekommt mehr <b>Anteil</b>, und typische Fehler werden herausgerechnet.</p>
     </div>
     ${trackBlock(R)}
     ${modelTable(R)}
     <div class="explain">
       <p><b>Fehler:</b> So weit lag das Modell hier in den letzten 4 Wochen im Schnitt daneben (Temperatur für den nächsten Tag, nach Ortskorrektur).</p>
-      <p><b>Einfluss:</b> Anteil an unserer Vorhersage. In den ersten Tagen zählt die Mischung, die hier zuletzt am besten traf, getrennt für Tag und Nacht. Ab Tag 6 zählt vor allem ECMWF AIFS, langfristig das stärkste Modell für Deutschland.</p>
+      <p><b>Anteil:</b> wie stark das Modell in unsere Vorhersage eingeht. In den ersten Tagen zählt die Mischung, die hier zuletzt am besten traf, getrennt für Tag und Nacht. Ab Tag 6 zählt vor allem ECMWF AIFS, langfristig das stärkste Modell für Deutschland.</p>
       <p><b>Tageswerte</b> gelten für 8–20 Uhr. Tippe auf einen Tag für Details und alle Modelle.</p>
       <p><b>Regenwahrscheinlichkeit und Spannen</b> stammen aus ${Object.values(R.members).reduce((s,m)=>s+m.P.length,0)} leicht variierten Rechenläufen von Google, ECMWF und DWD.${R.ST && R.ST.elev!=null ? ` Ort auf ${Math.round(R.ST.elev)} m Höhe${R.ST.hilly? '; im bergigen Gelände zählen fein aufgelöste Modelle (ICON-D2, AROME) in den ersten Tagen mehr':''}.`:''}</p>
       <p class="muted">Google WeatherNext liefert keine Archivdaten; es geht mit festem Anteil ein und erhält die durchschnittliche Ortskorrektur der anderen Modelle.</p>
@@ -985,7 +986,7 @@ function histDetail(H, k){
     ${histChart(d)}
     <div class="dline">Unsere Vorhersage: Höchstwert ${dv(f.tmax, o.tmax)}, Tiefstwert ${dv(f.tmin, o.tmin)}${rainV ? ', ' + rainV : ''}.</div>
     <div class="dsec">Vorhersagen vom Vortag (8–20 Uhr)</div>
-    <div class="hrow head"><div class="n"></div><div>Tief</div><div>Hoch</div><div>Regen mm</div></div>
+    <div class="hrow head"><div class="n"></div><div>Tief</div><div>Hoch</div><div>Nieder&shy;schlag mm</div></div>
     <div class="hrow obs"><div class="n">Gemessen</div><div>${r0(o.tmin)}°</div><div>${r0(o.tmax)}°</div><div>${o.rain == null ? '–' : fmt1(o.rain)}</div></div>
     <div class="hrow cons"><div class="n">Unsere Vorhersage</div><div>${r0(f.tmin)}°</div><div>${r0(f.tmax)}°</div><div>${f.rain == null ? '–' : fmt1(f.rain)}</div></div>
     ${rows}
@@ -1017,15 +1018,17 @@ function dayDetail(d, i){
   return `
     <div class="dsec">Ganzer Tag (0–24 Uhr)</div>
     <div class="hours">${hrs}</div>
-    <div class="dline">${r0(F.tmin)}° bis ${r0(F.tmax)}° <span>· 8–20 Uhr: ${r0(d.tmin)}° bis ${r0(d.tmax)}°</span></div>
-    <div class="dline">Regen <span style="white-space:nowrap">0–8 Uhr:</span> ${mm(F.pEarly)} · <span style="white-space:nowrap">8–20 Uhr:</span> ${mm(d.psum)} · <span style="white-space:nowrap">20–24 Uhr:</span> ${mm(F.pLate)}</div>
-    ${d.sunH!=null ? `<div class="dline">Sonnenschein 8–20 Uhr: ${d.sunH<0.5 ? 'kaum' : 'etwa ' + Math.round(d.sunH) + ' Std.'}${d.sunM.length>=2 && Math.round(Math.max(...d.sunM)) > Math.round(Math.min(...d.sunM)) ? ` <span>· Modelle ${Math.round(Math.min(...d.sunM))}–${Math.round(Math.max(...d.sunM))} Std.</span>` : ''}</div>` : ''}
+    <div class="kv">
+      <div>Temperatur</div><div>${r0(F.tmin)}° bis ${r0(F.tmax)}°${r0(F.tmin) !== r0(d.tmin) || r0(F.tmax) !== r0(d.tmax) ? ` <span>(8–20 Uhr: ${r0(d.tmin)}° bis ${r0(d.tmax)}°)</span>` : ''}</div>
+      <div>Niederschlag</div><div>${(() => { const rest = (F.pEarly||0) + (F.pLate||0);
+        return d.psum < 0.05 && rest < 0.05 ? 'trocken' : `${mm(d.psum)} <span>(8–20 Uhr)</span>${rest >= 0.05 ? ` <span>· sonst ${mm(rest)}</span>` : ''}`; })()}</div>
+      ${d.sunH!=null ? `<div>Sonne</div><div>${d.sunH<0.5 ? 'kaum' : 'etwa ' + Math.round(d.sunH) + ' h'}${d.sunM.length>=2 && Math.round(Math.max(...d.sunM)) > Math.round(Math.min(...d.sunM)) ? ` <span>· Modelle ${Math.round(Math.min(...d.sunM))}–${Math.round(Math.max(...d.sunM))} h</span>` : ''}</div>` : ''}
+    </div>
     ${certainty(d)}
-    <div class="dsec">Die einzelnen Modelle (8–20 Uhr)</div>
-    <div class="mrow head"><div></div><div class="r">Tief</div><div></div><div>Hoch</div><div class="r">Regen<br>mm</div><div>Einfluss</div></div>
+    <div class="dsec">Die Modelle und ihr Anteil an unserer Vorhersage (8–20 Uhr)</div>
+    <div class="mrow head"><div></div><div class="r">Tief</div><div></div><div>Hoch</div><div class="r">Nieder&shy;schlag mm</div><div>Anteil</div></div>
     <div class="mrow cons"><div class="n">Unsere Vorhersage</div><div class="r">${r0(d.tmin)}°</div>${bar(d.tmin,d.tmax)}<div>${r0(d.tmax)}°</div><div class="r">${fmt1(d.psum)}</div><div></div></div>
-    ${rows}
-    <div class="hint" style="margin-top:6px"><b>Einfluss:</b> wie stark das Modell in unsere Vorhersage eingeht. Wer hier zuletzt genauer lag, zählt mehr.</div>`;
+    ${rows}`;
 }
 
 // Regenbalken: nur sichtbar, wenn in den nächsten 2 Stunden laut Radar Regen fällt
@@ -1034,13 +1037,19 @@ function rainChart(R){
   const now = Date.now(), fr = NC.frames.filter(f => f.ms >= now - 5*60e3 && f.ms <= now + 120*60e3);
   const ch = NC.change();
   if(fr.length < 6 || !(NC.rateNow >= 0.1 || (ch && ch.wet))) return '';
-  const W = 300, H = 54, bw = W/fr.length;
-  const hgt = mmh => mmh <= 0 ? 0 : Math.min(1, Math.log10(1 + mmh*4)/Math.log10(41)) * (H-6);   // 10 mm/h = voll
-  const bars = fr.map((f,i) => { const h = hgt(f.mm*12); return h ? `<rect x="${(i*bw+1).toFixed(1)}" y="${(H-h).toFixed(1)}" width="${(bw-2).toFixed(1)}" height="${h.toFixed(1)}" rx="1.5" fill="${f.ms > now ? '#7fb8e6' : '#a9d0f0'}"/>` : ''; }).join('');
-  const grid = [0.25,0.5,0.75].map(q => `<line x1="0" x2="${W}" y1="${(H-6)*(1-q)+6}" y2="${(H-6)*(1-q)+6}" stroke="rgba(243,238,228,.08)"/>`).join('');
+  // Skala in mm pro Stunde, passt sich an die stärkste Stunde an (0,5 … 50 mm/h)
+  const W = 300, H = 70, L0 = 34, top = 8, bw = (W - L0)/fr.length;
+  const mx = Math.max(...fr.map(f => f.mm*12)), top_ = [0.5, 1, 2, 5, 10, 20, 50].find(v => v >= mx) || 50;
+  const y = v => H - Math.min(1, v/top_)*(H - top);
+  const bars = fr.map((f,i) => { const v = f.mm*12; if(v <= 0) return ''; const h = Math.max(1.5, H - y(v));
+    return `<rect x="${(L0 + i*bw + 0.8).toFixed(1)}" y="${(H-h).toFixed(1)}" width="${(bw-1.6).toFixed(1)}" height="${h.toFixed(1)}" rx="1.2" fill="${f.ms > now ? '#7fb8e6' : '#a9d0f0'}"/>`; }).join('');
+  const nf = v => v.toLocaleString('de-DE');
+  const grid = [top_, top_/2].map(v => `<line x1="${L0}" x2="${W}" y1="${y(v)}" y2="${y(v)}" stroke="rgba(243,238,228,.14)" stroke-dasharray="2 3"/><text x="${L0-4}" y="${y(v)+3}" text-anchor="end">${nf(v)}</text>`).join('')
+    + `<line x1="${L0}" x2="${W}" y1="${H-0.5}" y2="${H-0.5}" stroke="rgba(243,238,228,.25)"/><text x="${L0-4}" y="${H}" text-anchor="end">0</text>`;
+  const word = mx < 2.5 ? 'leicht' : mx < 10 ? 'mäßig' : 'kräftig';           // Einteilung wie beim DWD
   const t = ms => new Date(ms).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'});
-  return `<div class="rain2h"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${grid}${bars}</svg>
-    <div class="ax"><span>Jetzt</span><span>${t(now+30*60e3)}</span><span>${t(now+60*60e3)}</span><span>${t(now+90*60e3)}</span><span>${t(now+120*60e3)}</span></div></div>`;
+  return `<div class="rain2h"><div class="rlab">Niederschlag laut Radar in mm pro Stunde · bis ${nf(Math.round(mx*10)/10)} mm/h (${word})</div><svg viewBox="0 0 ${W} ${H}">${grid}${bars}</svg>
+    <div class="ax" style="padding-left:${(L0/W*100).toFixed(1)}%"><span>Jetzt</span><span>${t(now+30*60e3)}</span><span>${t(now+60*60e3)}</span><span>${t(now+90*60e3)}</span><span>${t(now+120*60e3)}</span></div></div>`;
 }
 
 // Warnungen: in Deutschland amtlich (DWD), sonst eigene Hinweise aus den Modellen
@@ -1111,7 +1120,7 @@ function certainty(d){
   const s = d.byModel.slice().sort((a,b)=>a.tmax-b.tmax);
   if(s.length > 2 && s[s.length-1].tmax - s[0].tmax >= 2)
     parts.push(`<div class="dline">Höchstwert je nach Modell ${r0(s[0].tmax)}° <span>(${s[0].m.name})</span> bis ${r0(s[s.length-1].tmax)}° <span>(${s[s.length-1].m.name})</span>.</div>`);
-  return parts.length ? `<div class="dsec">Wie sicher ist das?</div>${parts.join('')}` : '';
+  return parts.length ? `<div class="dsec">Wie sicher ist die Vorhersage für diesen Tag?</div>${parts.join('')}` : '';
 }
 
 // Eine Zeile, die auch eingeklappt sichtbar bleibt
@@ -1166,30 +1175,43 @@ function modelTable(R){
       ${cell('d1', m)}${cell('d6', m)}</div>`;
   }).join('');
   return `<div style="padding:4px 16px 0">
-    <div class="mrow head" ${G}><div>Modell</div><div class="r">Fehler</div><div>Einfluss<br>1–2 Tage</div><div>Einfluss<br>ab Tag 6</div></div>
+    <div class="mrow head" ${G}><div>Modell</div><div class="r">Fehler</div><div>Anteil<br>1–2 Tage</div><div>Anteil<br>ab Tag 6</div></div>
     ${rows}</div>`;
 }
 
+// Niederschlagsart: gemessene DWD-Niederschlagsart am Ort (wenn frisch), sonst nach Temperatur
+const PTYPE = [{verb:'regnet es', noun:'Regen', fall:'Regen'}, {verb:'fällt Schneeregen', noun:'Schneeregen', fall:'Schneeregen'},
+  {verb:'schneit es', noun:'Schnee', fall:'Schneefall'}, {verb:'fällt gefrierender Regen (Glätte)', noun:'gefrierender Regen', fall:'gefrierender Regen'},
+  {verb:'fällt Graupel', noun:'Graupel', fall:'Graupel'}, {verb:'hagelt es', noun:'Hagel', fall:'Hagel'}];
+const PT_ANY = {verb:'gibt es Niederschlag', noun:'Niederschlag', fall:'Niederschlag'};
+function ptypeAt(R, i, now){
+  if(now && state.hgType && state.hgType.key === (state.place && state.place.lat + ',' + state.place.lon) && Date.now() - state.hgType.at < 60*60e3 && state.hgType.type <= 5)
+    return PTYPE[state.hgType.type];
+  const t = now && R.curObs ? R.curObs.t : R.hourly[i] && R.hourly[i].temp;
+  if(t == null) return PT_ANY;
+  return t <= 0.5 ? PTYPE[2] : t < 2 ? PT_ANY : PTYPE[0];            // um 1 °C ist Schnee oder Regen offen
+}
 function makeSummary(R){
   const c = R.cur, rest = R.hourly.slice(R.nowIdx, R.nowIdx+12);
   const rainH = rest.find(h => h.pr>=0.5 && h.prcp>=0.2);
   const dry = !rest.some(h => h.pr>=0.3 && h.prcp>=0.1);
   let s = '';
   if(R.gauge){
-    s = `${R.gauge.mmh < 0.5 ? 'Nieselregen' : 'Regen'} an der LMU-Station gemessen, das Radar sieht ihn nicht`;
+    s = ptypeAt(R, R.nowIdx, true).noun === 'Schnee' ? 'Leichter Schneefall an der LMU-Station gemessen, das Radar sieht ihn nicht' : `${R.gauge.mmh < 0.5 ? 'Nieselregen' : 'Regen'} an der LMU-Station gemessen, das Radar sieht ihn nicht`;
   }
   else if(R.NC){
     const ch = R.NC.change();
-    if(R.NC.rateNow >= 0.1) s = `Laut Radar regnet es gerade${ch ? `, voraussichtlich bis etwa ${ch.at} Uhr` : ''}`;
-    else if(ch && ch.wet) s = `Laut Radar trocken, ${ch.light ? 'leichter Regen' : 'Regen'} ab etwa ${ch.at} Uhr`;
+    const P0 = ptypeAt(R, R.nowIdx, true);
+    if(R.NC.rateNow >= 0.1) s = `Laut Radar ${P0.verb} gerade${ch ? `, voraussichtlich bis etwa ${ch.at} Uhr` : ''}`;
+    else if(ch && ch.wet) s = `Laut Radar trocken, ${ch.light ? 'leichter ' + P0.fall : P0.noun} ab etwa ${ch.at} Uhr`;
     else s = 'Laut Radar trocken in den nächsten 2 Stunden';
     const later = R.hourly.slice(R.nowIdx+3, R.nowIdx+12).find(h => h.pr>=0.5 && h.prcp>=0.2);
-    if(R.NC.rateNow < 0.1 && !(ch && ch.wet) && later) s += `, danach Regen ab etwa ${later.t.slice(11,13)} Uhr`;
+    if(R.NC.rateNow < 0.1 && !(ch && ch.wet) && later) s += `, danach ${ptypeAt(R, later.i).noun} ab etwa ${later.t.slice(11,13)} Uhr`;
   }
-  else if(['rain','thunder','snow'].includes(hourCond(R.hourly[R.nowIdx]).k) || (rainH && rainH.i===R.nowIdx)) s = 'Es regnet gerade';
-  else if(rainH) s = `Regen wahrscheinlich ab etwa ${rainH.t.slice(11,13)} Uhr`;
+  else if(['rain','thunder','snow'].includes(hourCond(R.hourly[R.nowIdx]).k) || (rainH && rainH.i===R.nowIdx)) { const P = ptypeAt(R, R.nowIdx, true); s = ({'regnet es':'Es regnet gerade', 'schneit es':'Es schneit gerade', 'hagelt es':'Es hagelt gerade'})[P.verb] || 'Gerade ' + P.verb; }
+  else if(rainH) s = `${ptypeAt(R, rainH.i).noun} wahrscheinlich ab etwa ${rainH.t.slice(11,13)} Uhr`;
   else if(dry) s = 'In den nächsten 12 Stunden trocken';
-  else s = 'Vereinzelt Schauer möglich';
+  else s = ptypeAt(R, R.nowIdx + 3).noun === 'Schnee' ? 'Vereinzelt Schneeschauer möglich' : 'Vereinzelt Schauer möglich';
   const tm = R.days[1];
   if(tm){ const t = tm.cond.txt, noun = /^(Regen|Schnee|Gewitter|Nebel|Starker|Leichter|Schauer|Schneeschauer)/.test(t);
     s += `. Morgen tagsüber ${r0(tm.tmin)}–${r0(tm.tmax)}°, ${noun ? t : t.charAt(0).toLowerCase() + t.slice(1)}`; }
@@ -1213,6 +1235,50 @@ const svgScale = () => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColo
 // Die Karte wird nur einmal pro Ort erzeugt und beim Neuzeichnen der Seite weiterverwendet,
 // damit Kacheln nicht neu geladen werden müssen.
 let map = null, mapEl = null, mapKey = null, mapLayers = null;
+
+// ===== Radar mit Niederschlagsart (Schnee rosa) – nutzt die Rechenlogik der Radarseite im Hintergrund =====
+// Fällt das aus, bleibt das normale DWD-Radarbild (ohne Niederschlagsart) stehen.
+const RB = {s: 45.6, n: 55.95, w: 1.4, e: 18.8}, mercY = lat => Math.log(Math.tan(Math.PI/4 + lat*Math.PI/360));
+const RPAL = [
+  ['#8fe8ff','#62d6ff','#38bff9','#26a6f2','#1787e0','#1466c8','#1847a8','#1b2f8a','#ff4b3e','#d1002f','#8b0022'],
+  ['#e8ddff','#d3c2ff','#bca5ff','#a488fb','#8c6cf0','#7653e0','#6340c9','#5230ae','#432393','#36197a','#2a1163'],
+  ['#ffc8ea','#ffb0de','#ffa3d9','#ff85cc','#f765bc','#e548a8','#cc2f93','#b01d7e','#93136a','#760b57','#5c0646'],
+  ['#c6ffd9','#9af7bd','#6eeea0','#45e285','#22d36d','#0fbf5b','#0aa64d','#088c41','#067336','#055c2c','#044823'],
+  ['#fff3b0','#ffec95','#ffe47a','#ffdc60','#ffd447','#ffcc2e','#ffc414','#f5b800','#e0a800','#cc9900','#b88a00'],
+  ['#ffd199','#ffc27a','#ffb35c','#ffa43d','#ff951f','#ff8600','#f07a00','#db6f00','#c76400','#b35900','#9e4f00']];
+let radarEng = null;
+function radarEngine(){
+  if(radarEng) return radarEng;
+  try{
+    const W = Math.round((RB.e - RB.w)*256*128/360), H = Math.round((mercY(RB.n) - mercY(RB.s))*256*128/(2*Math.PI));
+    const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+    const wk = new Worker('radar/worker.js');
+    const E = radarEng = {cv, wk, W, H, init:false, ok:false, t:null, hg:false, busy:false, onReady:null, vid:0};
+    const val = () => { const P = state.place; if(!P || !E.hg) return; const id = ++E.vid;
+      wk.postMessage({cmd:'value', id, t: E.t, lat: P.lat, lon: P.lon}); E.valKey = P.lat + ',' + P.lon; };
+    wk.onmessage = e => {
+      const m = e.data;
+      if(m.cmd === 'init'){ E.init = true; E.load(); }
+      else if(m.cmd === 'hg'){ E.hg = !!(m.meta && Date.now() - Date.parse(m.meta.time) < 60*60e3); val(); if(E.ok) E.draw(); }
+      else if(m.cmd === 'frame'){ if(m.t === E.t && m.ok) E.draw(); else if(m.t === E.t){ E.busy = false; } }
+      else if(m.cmd === 'render'){ E.busy = false;
+        cv.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(m.buf), W, H), 0, 0); E.buf = m.buf;
+        E.ok = true; if(E.onReady) E.onReady(); if(E.again) E.draw(); }
+      else if(m.cmd === 'value' && m.id === E.vid){
+        state.hgType = m.type != null && m.type <= 5 ? {type: m.type, at: Date.now(), key: E.valKey} : null;
+        const n = document.querySelector('.note'); if(n && state.res) n.innerHTML = makeSummary(state.res);
+      }
+    };
+    wk.onerror = () => { E.failed = true; };
+    E.buf = new ArrayBuffer(W*H*4);
+    E.load = () => { if(!E.init) return; E.t = Math.floor((Date.now() - 7*60e3)/300e3)*300e3;
+      wk.postMessage({cmd:'hg'}); wk.postMessage({cmd:'frame', t: E.t}); };
+    E.draw = () => { if(!E.buf){ E.again = true; return; } E.again = false; const b = E.buf; E.buf = null; E.busy = true; wk.postMessage({cmd:'render', t: E.t, buf: b, type: E.hg, id: 1}, [b]); };
+    E.place = () => val();
+    wk.postMessage({cmd:'init', W, H, west: RB.w, east: RB.e, yN: mercY(RB.n), yS: mercY(RB.s), palette: RPAL});
+    return E;
+  }catch(err){ return null; }
+}
 function initMap(place){
   const holder = $('#map'); if(!holder) return;
   if(typeof L === 'undefined') { holder.innerHTML = '<div class="loading" style="padding:120px 0">Karte nicht verfügbar</div>'; return; }
@@ -1222,7 +1288,7 @@ function initMap(place){
     holder.replaceWith(mapEl);                       // bestehende Karte samt geladenen Kacheln wieder einsetzen
     setTimeout(() => map.invalidateSize(), 30);
     const stamp = Math.floor(Date.now()/300e3);      // neues Radarbild höchstens alle 5 Minuten holen
-    if(mapLayers.radarStamp !== stamp){ mapLayers.radarStamp = stamp; mapLayers.radar.setParams({_t: stamp}); }
+    if(mapLayers.radarStamp !== stamp){ mapLayers.radarStamp = stamp; mapLayers.radar.setParams({_t: stamp}); if(radarEng) radarEng.load(); }
   } else {
     if(map){ map.remove(); map = null; }
     // In der Seite ist die Karte fest (sonst blockiert sie das Scrollen); per Tipp öffnet sie im Vollbild.
@@ -1231,18 +1297,25 @@ function initMap(place){
     mapEl = holder; mapKey = key;
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:12, className:'basemap', keepBuffer:4}).addTo(map);
     const wms = (layers, op) => L.tileLayer.wms('https://maps.dwd.de/geoserver/dwd/wms', {layers, format:'image/png', transparent:true, opacity:op, version:'1.3.0', keepBuffer:4});
-    mapLayers = {radar: wms('dwd:Niederschlagsradar', .75).addTo(map), warn: null, radarStamp: Math.floor(Date.now()/300e3)};
+    mapLayers = {radar: wms('dwd:Niederschlagsradar', .75).addTo(map), warn: null, radarStamp: Math.floor(Date.now()/300e3), on: true, own: null};
+    const E = radarEngine();
+    if(E){
+      mapLayers.own = L.svgOverlay(E.cv, [[RB.s, RB.w], [RB.n, RB.e]], {interactive:false, opacity: 0}).addTo(map);
+      const ML = mapLayers;
+      E.onReady = () => { if(mapLayers !== ML) return; ML.own.setOpacity(ML.on ? .85 : 0); ML.radar.setOpacity(0); ML.ownOk = true; };
+      if(E.ok) E.onReady(); else E.load();
+    }
     L.circleMarker([place.lat, place.lon], {radius:6, color:'#fff', weight:2, fillColor:'#2b7cff', fillOpacity:1}).addTo(map);
     mapEl.addEventListener('click', () => { const c = document.querySelector('.mapcard'); if(c && !c.classList.contains('full')) setMapFull(true); });
   }
   // Ebenen-Schalter: nur ein-/ausblenden (sofort), nichts neu laden
   document.querySelectorAll('.mapbar .chip').forEach(btn => {
     const k = btn.dataset.l;
-    const isOn = k === 'radar' ? mapLayers.radar.options.opacity > 0 : !!(mapLayers.warn && mapLayers.warn.options.opacity > 0);
+    const isOn = k === 'radar' ? mapLayers.on !== false : !!(mapLayers.warn && mapLayers.warn.options.opacity > 0);
     btn.classList.toggle('on', isOn);
     btn.onclick = () => {
       const on = !btn.classList.contains('on'); btn.classList.toggle('on', on);
-      if(k === 'radar') mapLayers.radar.setOpacity(on ? .75 : 0);
+      if(k === 'radar'){ mapLayers.on = on; if(mapLayers.ownOk) mapLayers.own.setOpacity(on ? .85 : 0); else mapLayers.radar.setOpacity(on ? .75 : 0); }
       if(k === 'warn'){
         if(!mapLayers.warn) mapLayers.warn = L.tileLayer.wms('https://maps.dwd.de/geoserver/dwd/wms', {layers:'dwd:Warnungen_Gemeinden', format:'image/png', transparent:true, opacity:.55, version:'1.3.0'}).addTo(map);
         else mapLayers.warn.setOpacity(on ? .55 : 0);
@@ -1295,6 +1368,7 @@ async function load(force){
     await Promise.all([
       data.liveP ? data.liveP.then(L => patch(L)).catch(() => {}) : null,
       data.statsP ? data.statsP.then(N => { if(N) patch({stats: N}); }).catch(() => {}) : null,
+      (radarEng && radarEng.place(), null),
     ]);
   }catch(e){
     if(my === loadSeq) $('#app').innerHTML = `<div class="hero"><div class="place">${esc(p.name)}</div></div><div class="err">Daten konnten nicht geladen werden: ${esc(e.message||e)}<br>Zum erneuten Versuch nach unten ziehen.</div>`;

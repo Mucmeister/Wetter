@@ -94,11 +94,14 @@ body.snow{--bg1:#6f8299;--bg2:#b4c3d4}
 .dsec{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.3px;color:var(--fg3);margin:14px 0 4px}
 .dline{font-size:14px;color:var(--fg);line-height:1.45}
 .dline span{color:var(--fg2)}
+.kv{display:grid;grid-template-columns:96px 1fr;gap:3px 8px;font-size:14px;line-height:1.4;margin-top:4px}
+.kv > div:nth-child(odd){color:var(--fg3)}
+.kv span{color:var(--fg2)}
 .detail .hours{padding:6px 0 4px;margin:0 -6px}
 .detail .hr{flex:0 0 46px}
 .detail .hr svg{width:26px;height:26px}
 .detail .hr.out{opacity:.5}
-.mrow{display:grid;grid-template-columns:minmax(0,1fr) 24px 50px 24px 36px 58px;gap:6px;align-items:center;padding:7px 0;border-top:1px solid var(--line);font-size:13px;color:var(--fg)}
+.mrow{display:grid;grid-template-columns:minmax(0,1fr) 24px 44px 24px 44px 58px;gap:6px;align-items:center;padding:7px 0;border-top:1px solid var(--line);font-size:13px;color:var(--fg)}
 .mrow.head{border-top:0;font-size:10px;font-weight:600;color:var(--fg3);text-transform:uppercase;padding:2px 0;align-items:end;line-height:1.15}
 .mrow .n{line-height:1.2}
 .mrow .r{text-align:right}
@@ -221,7 +224,12 @@ html{background:#0d1a28}
 .basemap{filter:invert(1) hue-rotate(185deg) brightness(.78) contrast(.9) saturate(.35)}
 /* Regenbalken (Radar) */
 .rain2h{padding:8px 16px 4px;border-bottom:1px solid var(--line)}
-.rain2h svg{width:100%;height:54px;display:block}
+.rain2h svg{width:100%;height:auto;display:block}
+.rain2h svg text{font-size:9px;fill:rgba(243,238,228,.5)}
+.plegend{display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--fg2);flex-wrap:wrap}
+.plegend i{display:inline-block;width:16px;height:7px;border-radius:2px;margin-left:6px}
+.plegend i:first-child{margin-left:0}
+.rain2h .rlab{font-size:11px;color:var(--fg3);margin-bottom:2px}
 .rain2h .ax{display:flex;justify-content:space-between;font-size:11px;color:var(--fg3);margin-top:2px}
 /* Warnungen */
 .warn{border-radius:14px;padding:11px 14px;margin-bottom:12px;font-size:14px;line-height:1.35;cursor:pointer;border:1px solid transparent}
