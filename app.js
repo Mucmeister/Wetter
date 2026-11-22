@@ -32,7 +32,7 @@ const BUCKETS = [{k:'d1', off:1, from:0, to:1, label:'0–1'}, {k:'d2', off:2, f
 const bucketFor = d => BUCKETS.find(b => d >= b.from && d <= b.to);
 
 const DEMO = location.hash === '#demo';
-const BUILD = '2026-11-22.1';   // bei jeder Änderung erhöhen (gleich wie version.txt)
+const BUILD = '2026-11-22.2';   // bei jeder Änderung erhöhen (gleich wie version.txt)
 // Neue Version automatisch laden, sobald die App wieder geöffnet wird
 async function checkUpdate(){
   try{ const v = (await fetch('version.txt?' + Date.now(), {cache:'no-store'}).then(r => r.ok ? r.text() : '')).trim();
@@ -235,6 +235,70 @@ function statsWindow(D, i0, i1, withBias, only){
   }
   return S;
 }
+// ===== Optimale Mischung: welche Kombination der Modelle hätte die Messungen der letzten 30 Tage am besten getroffen? =====
+// Getrennt für Tag (9–18 Uhr) und Nacht, weil Modelle nachts (Kaltluft, Nebel) ganz anders abschneiden als tagsüber.
+// Rückrechnung an 9 Stationen über 60 Tage: Fehler 0,98° → 0,93° gegenüber den bisherigen Gewichten (Tage 1–4).
+const isDayH = h => h >= 9 && h <= 18;
+const WN_SHARE = 0.12;            // WeatherNext hat keine Archivdaten: fester Anteil
+const STACK_A = 0.75;             // 75 % optimale Mischung, 25 % bisherige Gewichte: robuster (Rückrechnung inkl. LMU-Station)
+// Ab Tag 6 gibt es keine Prüfdaten. Dann zählt, wer in Deutschland langfristig am besten abschneidet:
+// ECMWF AIFS (eigene Rückrechnung 1–5 Tage: bestes Modell, Vorsprung wächst mit dem Vorlauf; ECMWF: 5–15 % geringere Fehler als IFS),
+// dazu Ensemble-Mittel (WeatherNext 2) und ECMWF IFS.
+const LONG_W = {ecmwf_aifs025_single:0.38, google_weathernext2_ensemble:0.22, ecmwf_ifs:0.15, dwd_icon_seamless:0.08,
+                ukmo_seamless:0.06, ncep_aigfs025:0.06, ncep_gfs_seamless:0.05, meteofrance_seamless:0.03};
+function nnls(A, b, k){                 // nichtnegative kleinste Quadrate über die Normalgleichungen (k ≤ 8)
+  const w = new Array(k).fill(1/k);
+  for(let it=0; it<400; it++){
+    let moved = 0;
+    for(let j=0;j<k;j++){ if(A[j][j] <= 0) continue; let r = b[j]; for(let q=0;q<k;q++) r -= A[j][q]*w[q];
+      const nw = Math.max(0, w[j] + r/A[j][j]); moved += Math.abs(nw - w[j]); w[j] = nw; }
+    if(moved < 1e-7) break;
+  }
+  return w;
+}
+// Schreibt für die Vorlaufklassen 'keys' die Gewichte tw = [Nacht, Tag] in W (Basis: Korrektur aus S, Fenster i0..i1)
+function stackInto(W, D, S, i0, i1, keys){
+  for(const b of BUCKETS){
+    if(!keys.includes(b.k)) continue;
+    const key = `temperature_2m_previous_day${b.off}`;
+    // nur Modelle mit lückenarmen Daten im Fenster (sonst bleiben zu wenige gemeinsame Stunden)
+    const cov = m => { const F = D.per[m.id][key]; let c = 0, n = 0; for(let i=i0;i<i1;i++){ if(!D.past[i] || D.obsT[i]==null) continue; n++; if(F[i]!=null) c++; } return n ? c/n : 0; };
+    const ms = MODELS.filter(m => S[m.id]?.[b.k] && D.per[m.id]?.[key] && cov(m) >= 0.8);
+    const ws = stackW(D, key, i0, i1, ms, (m, bin) => S[m.id][b.k].bias[bin]);
+    if(!ws) continue;
+    const cur = ms.map(m => W[b.k][m.id].t); ws[0] = mixW(ws[0], cur); ws[1] = mixW(ws[1], cur);
+    for(const m of ALL_MODELS){ const e = W[b.k][m.id]; if(!e) continue;
+      const j = ms.indexOf(m);
+      e.tw = j >= 0 ? [ws[0][j]*(1-WN_SHARE), ws[1][j]*(1-WN_SHARE)] : (m.id === WN.id ? [WN_SHARE, WN_SHARE] : [0, 0]); }
+  }
+}
+// Mischungsgewichte [Nacht[], Tag[]] für die Modelle ms (Summe je 1) oder null bei zu wenig Daten
+function stackW(D, key, i0, i1, ms, biasOf){
+  {
+    if(ms.length < 3) return null;
+    const k = ms.length, parts = [0, 1].map(() => ({A: [...Array(k)].map(() => new Array(k).fill(0)), b: new Array(k).fill(0), n: 0}));
+    const x = new Array(k);
+    for(let i=i0;i<i1;i++){
+      const o = D.obsT[i]; if(!D.past[i] || o == null) continue;
+      const bin = binOf(D.lh[i]); let ok = true;
+      for(let j=0;j<k;j++){ const f = D.per[ms[j].id][key][i]; if(f == null){ ok = false; break; } x[j] = f - biasOf(ms[j], bin); }
+      if(!ok) continue;
+      const P = parts[isDayH(D.lh[i]) ? 1 : 0]; P.n++;
+      for(let j=0;j<k;j++){ P.b[j] += x[j]*o; for(let q=0;q<k;q++) P.A[j][q] += x[j]*x[q]; }
+    }
+    if(parts.some(P => P.n < 72)) return null;
+    return parts.map(P => { const w = nnls(P.A, P.b, k), t = w.reduce((a,c)=>a+c,0); return w.map(v => t > 0 ? v/t : 1/k); });
+  }
+}
+// optimale Mischung mit den bisherigen Gewichten (cur, beliebig skaliert) verbinden
+const mixW = (st, cur) => { const t = cur.reduce((a,c)=>a+c,0) || 1; return st.map((v,j) => STACK_A*v + (1-STACK_A)*cur[j]/t); };
+const wT = (w, h) => w.tw ? w.tw[isDayH(h) ? 1 : 0] : w.t;       // Temperaturgewicht zur Tageszeit
+// Gewichte für die Vorhersage vom Vortag, nur mit Wissen bis s0 (für Trefferbilanz und Rückblick)
+function weightsAt(D, s0, hilly, stack = true){
+  const i0 = Math.max(0, s0 - WINDOW_DAYS*24), S = statsWindow(D, i0, s0, true, ['d1']);
+  const W = weightsFrom(S, hilly); if(stack) stackInto(W, D, S, i0, s0, ['d1']); return W.d1;
+}
+
 function weightsFrom(S, hilly){
   const W = {};
   for(const b of BUCKETS){
@@ -254,6 +318,12 @@ function weightsFrom(S, hilly){
         W[b.k][m.id] = {t: prior, p: prior, src:'prior', bias: medBias};
       }
     }
+  }
+  // Ab Tag 6: feste Gewichte nach langfristiger Treffsicherheit; Ortskorrektur aus 4–5 Tagen, abgeschwächt
+  for(const m of ALL_MODELS){
+    const e = W.d6[m.id], b4 = W.d4[m.id] && W.d4[m.id].bias;
+    W.d6[m.id] = {...e, t: LONG_W[m.id] ?? 0.03, src: e.src === 'skill' ? 'skill' : e.src, long: true,
+                  bias: b4 ? b4.map(v => v*0.7) : e.bias};
   }
   return W;
 }
@@ -281,31 +351,33 @@ async function computeAllStats(lat, lon, offSec){
   const kNow = station ? rainK(Infinity) : 1;
   const all = statsWindow(D, Math.max(0, D.n - WINDOW_DAYS*24), D.n, !!station);
   const W = weightsFrom(all, hilly);
+  if(station) stackInto(W, D, all, Math.max(0, D.n - WINDOW_DAYS*24), D.n, ['d1','d2','d4']);
   // Ortskorrektur in Worten: mittlere Abweichung der Modelle bei 1 Tag Vorlauf
   const cityBias = station ? median(MODELS.map(m => all[m.id]?.d1 ? mean(all[m.id].d1.bias) : null)) : null;
   const nightBias = station ? median(MODELS.map(m => all[m.id]?.d1 ? Math.min(...all[m.id].d1.bias.slice(0,2)) : null)) : null;
   // Trefferbilanz: jeder der letzten Tage nur mit Wissen von davor (ehrlicher Rückblick)
-  let track = null;
+  let track = null, useStack = true;
   if(station){
     const dayStarts = [];
     for(let i=1;i<D.n;i++) if(D.lh[i] === 0 && D.past[i] && i+23 < D.n && D.past[i+23]) dayStarts.push(i);
-    const use = dayStarts.slice(-TRACK_DAYS), acc = {ours:[0,0], avg:[0,0]}, per = {};
+    const use = dayStarts.slice(-TRACK_DAYS), acc = {ours:[0,0], avg:[0,0], old:[0,0]}, per = {};
     let days = 0; const rain = {days:0, ours:0, avg:0, per:{}};
     const yieldUI = () => new Promise(r => setTimeout(r, 0));   // Rechnung stückeln, damit Scrollen/Tippen flüssig bleibt
     await yieldUI();
     for(const s0 of use){
       if(s0 < 20*24) continue;
       if(dayStarts.indexOf(s0) % 3 === 0) await yieldUI();
-      const Sw = statsWindow(D, Math.max(0, s0 - WINDOW_DAYS*24), s0, true, ['d1']), Ww = weightsFrom(Sw, hilly).d1;
+      const Ww = weightsAt(D, s0, hilly);
       let used = 0;
       for(let i=s0;i<s0+24;i++){
         const o = D.obsT[i]; if(o==null) continue;
-        let sw=0, sv=0, raw=[];
+        let sw=0, sv=0, sw0=0, sv0=0, raw=[];
         for(const m of MODELS){ const f = D.per[m.id]?.temperature_2m_previous_day1?.[i]; if(f==null) continue;
           raw.push(f); (per[m.id] ||= [0,0]); per[m.id][0] += Math.abs(f-o); per[m.id][1]++;
-          const w = Ww[m.id]; sw += w.t; sv += w.t*(f - (w.bias? w.bias[binOf(D.lh[i])] : 0)); }
+          const w = Ww[m.id], fc = f - (w.bias? w.bias[binOf(D.lh[i])] : 0), ww = wT(w, D.lh[i]);
+          sw += ww; sv += ww*fc; sw0 += w.t; sv0 += w.t*fc; }          // neue Mischung und bisherige Gewichte im Vergleich
         if(!sw || raw.length < 3) continue;
-        acc.ours[0] += Math.abs(sv/sw - o); acc.ours[1]++; acc.avg[0] += Math.abs(mean(raw) - o); acc.avg[1]++; used++;
+        acc.ours[0] += Math.abs(sv/sw - o); acc.ours[1]++; acc.old[0] += Math.abs(sv0/sw0 - o); acc.old[1]++; acc.avg[0] += Math.abs(mean(raw) - o); acc.avg[1]++; used++;
       }
       if(used >= 18) days++;
       // Regen ja/nein zwischen 8 und 20 Uhr (ab 0,5 mm)
@@ -322,6 +394,9 @@ async function computeAllStats(lat, lon, offSec){
         for(const [id,v] of full){ (rain.per[id] ||= 0); if((v[0] >= 0.5) === wetO) rain.per[id]++; }
       }
     }
+    // Ortsabhängig: Die neue Mischung wird nur verwendet, wenn sie hier in den letzten 14 Tagen nicht schlechter war
+    useStack = !(acc.old[1] && acc.old[0] < acc.ours[0]);
+    if(!useStack){ for(const k of ['d1','d2','d4']) for(const id in W[k]) delete W[k][id].tw; acc.ours = acc.old; }
     if(days >= 5){
       const pm = Object.entries(per).map(([id,v]) => ({id, mae:v[0]/v[1]})).sort((a,b)=>a.mae-b.mae);
       track = {days, ours: acc.ours[0]/acc.ours[1], avg: acc.avg[0]/acc.avg[1], best: pm[0], models: pm};
@@ -345,9 +420,12 @@ async function computeAllStats(lat, lon, offSec){
           if(errs.length < 3) continue;
           const md = median(errs.map(e => e[1]));
           for(const [m, e] of errs) Wl[m.id] = m.prior * clamp(Math.pow(md/Math.max(e,0.15), 2), 0.35, 2.5);
+          const ms = errs.map(e => e[0]), sw2 = stackW(D, key, Math.max(0, s0-WINDOW_DAYS*24), s0, ms, (m, bin) => Bl[m.id][bin]);
+          if(sw2 && useStack){ const cur = ms.map(m => Wl[m.id]); sw2[0] = mixW(sw2[0], cur); sw2[1] = mixW(sw2[1], cur); }
           for(let i=s0;i<s0+24;i++){ const o = D.obsT[i]; if(o==null) continue;
             let sw=0, sv=0; const raw=[];
-            for(const [m] of errs){ const f = D.per[m.id][key][i]; if(f==null) continue; raw.push(f); sw += Wl[m.id]; sv += Wl[m.id]*(f - Bl[m.id][binOf(D.lh[i])]); }
+            for(const [m] of errs){ const f = D.per[m.id][key][i]; if(f==null) continue; raw.push(f);
+              const ww = sw2 && useStack ? sw2[isDayH(D.lh[i]) ? 1 : 0][ms.indexOf(m)] : Wl[m.id]; sw += ww; sv += ww*(f - Bl[m.id][binOf(D.lh[i])]); }
             if(raw.length < 3) continue; so += Math.abs(sv/sw - o); sa += Math.abs(mean(raw) - o); nn++; }
         }
         if(nn >= 24*5) track.leads.push({lead: L, ours: so/nn, avg: sa/nn});
@@ -363,13 +441,13 @@ async function computeAllStats(lat, lon, offSec){
     for(const s0 of starts.slice(-HIST_DAYS)){
       if(s0 < 20*24) continue;
       await new Promise(r => setTimeout(r, 0));
-      const Ww = weightsFrom(statsWindow(D, Math.max(0, s0 - WINDOW_DAYS*24), s0, true, ['d1']), hilly).d1;
+      const Ww = weightsAt(D, s0, hilly, useStack);
       const rk = rainK(s0), obsH = [], obsP = [], ourH = [], ourP = [];
       for(let i=s0;i<s0+24;i++){
         obsH.push(D.obsT[i]); obsP.push(D.obsP[i]);
         let sw=0, sv=0, pw=0, pv=0, n=0;
         for(const m of MODELS){ const w = Ww[m.id]; if(!w) continue;
-          const f = D.per[m.id]?.temperature_2m_previous_day1?.[i]; if(f!=null){ sw += w.t; sv += w.t*(f - (w.bias ? w.bias[binOf(D.lh[i])] : 0)); n++; }
+          const f = D.per[m.id]?.temperature_2m_previous_day1?.[i]; if(f!=null){ const ww = wT(w, D.lh[i]); sw += ww; sv += ww*(f - (w.bias ? w.bias[binOf(D.lh[i])] : 0)); n++; }
           const q = D.per[m.id]?.precipitation_previous_day1?.[i]; if(q!=null){ pw += w.p; pv += w.p*q; } }
         ourH.push(n >= 3 ? sv/sw : null); ourP.push(pw ? pv/pw*rk : null);
       }
@@ -388,7 +466,7 @@ async function computeAllStats(lat, lon, offSec){
     }
     if(out.length) hist = {days: out};
   }
-  return {W, track, cityBias, nightBias, elev, hilly, rainK: kNow, hist,
+  return {W, track, cityBias, nightBias, elev, hilly, rainK: kNow, hist, useStack,
           station: station ? {name:station.name, by:station.by, dist:station.dist, elev:station.elev} : null};
 }
 
@@ -454,7 +532,7 @@ function build(data){
     let s=0, w=0;
     for(const m of avail){
       const v = per[m.id][varName]?.[i]; if(v==null) continue;
-      const ww = W[b][m.id][kind]; s += v*ww; w += ww;
+      const e = W[b][m.id], ww = kind === 't' ? wT(e, +time[i].slice(11,13)) : e[kind]; s += v*ww; w += ww;
     }
     return w ? s/w : null;
   }
@@ -548,7 +626,13 @@ function build(data){
     curObs = {t: LN.t, name: 'LMU-Station Theresienstraße', dist: km(from ? from.lat : P.lat, from ? from.lon : P.lon, LN.lat, LN.lon),
               age: (Date.now() - Date.parse(LN.time))/60e3, fromYou: !!from};
   }
-  if(curObs && hourly[nowIdx]) hourly[nowIdx].temp = curObs.t;
+  if(curObs && hourly[nowIdx] && hourly[nowIdx].temp != null){
+    // Gemessene Abweichung klingt über die nächsten Stunden ab (Rückrechnung: Fehler in 1 Std. 1,0° → 0,5°, in 3 Std. → 0,8°)
+    const delta = clamp(curObs.t - hourly[nowIdx].temp, -5, 5);
+    for(let h=0; h<=18 && hourly[nowIdx+h]; h++){ const H = hourly[nowIdx+h], f = delta*Math.exp(-h/6);
+      if(H.temp != null) H.temp += f; if(H.feels != null) H.feels += f; }
+    hourly[nowIdx].temp = curObs.t;
+  }
 
   // Tage (Fenster 8–20 Uhr)
   const dates = [...new Set(time.map(t=>t.slice(0,10)))].slice(0, DAYS);
@@ -816,7 +900,7 @@ function render(place, R){
     ${modelTable(R)}
     <div class="explain">
       <p><b>Treffergenauigkeit:</b> So weit lag das Modell hier in den letzten 4 Wochen bei der Temperatur für den nächsten Tag im Schnitt daneben, nach der Ortskorrektur. Kleiner ist besser.</p>
-      <p><b>Einfluss:</b> Anteil des Modells an der Vorhersage, getrennt für die nächsten Tage und für später.</p>
+      <p><b>Einfluss:</b> Anteil des Modells an der Vorhersage. Für die ersten Tage rechnet die App aus, welche Mischung die Messungen der letzten 30 Tage am besten getroffen hätte, getrennt für Tag und Nacht. Das wird nur genutzt, wenn es an diesem Ort in den letzten 14 Tagen tatsächlich besser lag als die einfache Gewichtung. Ab Tag 6 gibt es dafür keine Prüfdaten; dann zählt das in Deutschland langfristig stärkste Modell, ECMWF AIFS, am meisten.</p>
       <p><b>Tageswerte</b> gelten für 8–20 Uhr, damit nächtlicher Regen keinen sonnigen Tag verdirbt. Tippe auf einen Tag für den ganzen Tag, die Unsicherheit und alle Modelle.</p>
       <p><b>Regen und Spannen</b> stammen aus ${Object.values(R.members).reduce((s,m)=>s+m.P.length,0)} leicht variierten Rechenläufen (Ensembles von Google, ECMWF und DWD) plus den Einzelmodellen.${R.ST && R.ST.elev!=null ? ` Ort auf ${Math.round(R.ST.elev)} m Höhe${R.ST.hilly? '; im bergigen Gelände zählen fein aufgelöste Modelle (ICON-D2, AROME) in den ersten Tagen mehr':''}.`:''}</p>
       <p class="muted">Google WeatherNext liefert keine Archivdaten; es geht mit festem Anteil ein und erhält die durchschnittliche Ortskorrektur der anderen Modelle.</p>
@@ -1067,7 +1151,8 @@ function trackBlock(R){
 }
 
 function modelTable(R){
-  const share = (bk, id) => { const tot = R.avail.reduce((s,x)=>s+R.W[bk][x.id].t,0); return R.W[bk][id].t/tot; };
+  const g = (bk, id) => { const e = R.W[bk][id]; return e.tw ? (e.tw[0] + e.tw[1])/2 : e.t; };
+  const share = (bk, id) => { const tot = R.avail.reduce((s,x)=>s+g(bk, x.id),0); return g(bk, id)/tot; };
   const list = R.avail.slice().sort((a,b)=>share('d1',b.id)-share('d1',a.id));
   const mx = Math.max(...list.flatMap(m => [share('d1',m.id), share('d6',m.id)]));
   const cell = (bk, m) => { const v = share(bk, m.id); return `<div class="infl"><i style="width:${Math.round(v/mx*30)}px"></i>${Math.round(v*100)}%</div>`; };
