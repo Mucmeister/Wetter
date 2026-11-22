@@ -32,7 +32,7 @@ const BUCKETS = [{k:'d1', off:1, from:0, to:1, label:'0–1'}, {k:'d2', off:2, f
 const bucketFor = d => BUCKETS.find(b => d >= b.from && d <= b.to);
 
 const DEMO = location.hash === '#demo';
-const BUILD = '2026-11-22.4';   // bei jeder Änderung erhöhen (gleich wie version.txt)
+const BUILD = '2026-11-22.5';   // bei jeder Änderung erhöhen (gleich wie version.txt)
 // Neue Version automatisch laden, sobald die App wieder geöffnet wird
 async function checkUpdate(){
   try{ const v = (await fetch('version.txt?' + Date.now(), {cache:'no-store'}).then(r => r.ok ? r.text() : '')).trim();
@@ -1180,10 +1180,14 @@ function modelTable(R){
 }
 
 // Niederschlagsart: gemessene DWD-Niederschlagsart am Ort (wenn frisch), sonst nach Temperatur
-const PTYPE = [{verb:'regnet es', noun:'Regen', fall:'Regen'}, {verb:'fällt Schneeregen', noun:'Schneeregen', fall:'Schneeregen'},
-  {verb:'schneit es', noun:'Schnee', fall:'Schneefall'}, {verb:'fällt gefrierender Regen (Glätte)', noun:'gefrierender Regen', fall:'gefrierender Regen'},
-  {verb:'fällt Graupel', noun:'Graupel', fall:'Graupel'}, {verb:'hagelt es', noun:'Hagel', fall:'Hagel'}];
-const PT_ANY = {verb:'gibt es Niederschlag', noun:'Niederschlag', fall:'Niederschlag'};
+// verb: „Laut Radar …“, it: Satz ohne Radar
+const PTYPE = [{verb:'regnet es gerade', it:'Es regnet gerade', noun:'Regen', fall:'Regen'},
+  {verb:'fällt gerade Schneeregen', it:'Gerade fällt Schneeregen', noun:'Schneeregen', fall:'Schneeregen'},
+  {verb:'schneit es gerade', it:'Es schneit gerade', noun:'Schnee', fall:'Schneefall'},
+  {verb:'fällt gerade gefrierender Regen (Glätte!)', it:'Gerade fällt gefrierender Regen (Glätte!)', noun:'gefrierender Regen', fall:'gefrierender Regen'},
+  {verb:'fällt gerade Graupel', it:'Gerade fällt Graupel', noun:'Graupel', fall:'Graupel'},
+  {verb:'hagelt es gerade', it:'Es hagelt gerade', noun:'Hagel', fall:'Hagel'}];
+const PT_ANY = {verb:'gibt es gerade Niederschlag', it:'Gerade gibt es Niederschlag', noun:'Niederschlag', fall:'Niederschlag'};
 function ptypeAt(R, i, now){
   if(now && state.hgType && state.hgType.key === (state.place && state.place.lat + ',' + state.place.lon) && Date.now() - state.hgType.at < 60*60e3 && state.hgType.type <= 5)
     return PTYPE[state.hgType.type];
@@ -1202,19 +1206,19 @@ function makeSummary(R){
   else if(R.NC){
     const ch = R.NC.change();
     const P0 = ptypeAt(R, R.nowIdx, true);
-    if(R.NC.rateNow >= 0.1) s = `Laut Radar ${P0.verb} gerade${ch ? `, voraussichtlich bis etwa ${ch.at} Uhr` : ''}`;
+    if(R.NC.rateNow >= 0.1) s = `Laut Radar ${P0.verb}${ch ? `, voraussichtlich bis etwa ${ch.at} Uhr` : ''}`;
     else if(ch && ch.wet) s = `Laut Radar trocken, ${ch.light ? 'leichter ' + P0.fall : P0.noun} ab etwa ${ch.at} Uhr`;
     else s = 'Laut Radar trocken in den nächsten 2 Stunden';
     const later = R.hourly.slice(R.nowIdx+3, R.nowIdx+12).find(h => h.pr>=0.5 && h.prcp>=0.2);
     if(R.NC.rateNow < 0.1 && !(ch && ch.wet) && later) s += `, danach ${ptypeAt(R, later.i).noun} ab etwa ${later.t.slice(11,13)} Uhr`;
   }
-  else if(['rain','thunder','snow'].includes(hourCond(R.hourly[R.nowIdx]).k) || (rainH && rainH.i===R.nowIdx)) { const P = ptypeAt(R, R.nowIdx, true); s = ({'regnet es':'Es regnet gerade', 'schneit es':'Es schneit gerade', 'hagelt es':'Es hagelt gerade'})[P.verb] || 'Gerade ' + P.verb; }
+  else if(['rain','thunder','snow'].includes(hourCond(R.hourly[R.nowIdx]).k) || (rainH && rainH.i===R.nowIdx)) s = ptypeAt(R, R.nowIdx, true).it;
   else if(rainH) s = `${ptypeAt(R, rainH.i).noun} wahrscheinlich ab etwa ${rainH.t.slice(11,13)} Uhr`;
   else if(dry) s = 'In den nächsten 12 Stunden trocken';
   else s = ptypeAt(R, R.nowIdx + 3).noun === 'Schnee' ? 'Vereinzelt Schneeschauer möglich' : 'Vereinzelt Schauer möglich';
   const tm = R.days[1];
   if(tm){ const t = tm.cond.txt, noun = /^(Regen|Schnee|Gewitter|Nebel|Starker|Leichter|Schauer|Schneeschauer)/.test(t);
-    s += `. Morgen tagsüber ${r0(tm.tmin)}–${r0(tm.tmax)}°, ${noun ? t : t.charAt(0).toLowerCase() + t.slice(1)}`; }
+    s += `. Morgen tagsüber ${tm.tmin < -0.5 ? `${r0(tm.tmin)}° bis ${r0(tm.tmax)}°` : `${r0(tm.tmin)}–${r0(tm.tmax)}°`}, ${noun ? t : t.charAt(0).toLowerCase() + t.slice(1)}`; }
   const g = R.hourly.slice(R.nowIdx, R.nowIdx+24).reduce((m,h)=>Math.max(m,h.gust||0),0);
   if(g >= 60) s += `. Sturmböen bis ${r0(g)} km/h`;
   return s + '.';
