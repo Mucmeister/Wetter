@@ -36,7 +36,7 @@ const BUCKETS = [{k:'d1', off:1, from:0, to:1, label:'0–1'}, {k:'d2', off:2, f
 const bucketFor = d => BUCKETS.find(b => d >= b.from && d <= b.to);
 
 const DEMO = location.hash === '#demo';
-const BUILD = '2026-11-23.2';   // bei jeder Änderung erhöhen (gleich wie version.txt)
+const BUILD = '2026-11-23.3';   // bei jeder Änderung erhöhen (gleich wie version.txt)
 // Neue Version automatisch laden, sobald die App wieder geöffnet wird
 async function checkUpdate(){
   try{ const v = (await fetch('version.txt?' + Date.now(), {cache:'no-store'}).then(r => r.ok ? r.text() : '')).trim();
@@ -800,7 +800,7 @@ function build(data){
     const sunDay = i0 >= 0 && sunF.filter(v => v != null).length >= 22 ? sunF.reduce((a,b) => a + (b||0), 0)/3600 : null;
     const sunM = avail.map(m => { const S = per[m.id].sunshine_duration; if(!S) return null; let x=0;
       for(let i=iS+1;i<=iE;i++){ if(S[i]==null) return null; x+=S[i]; } return x/3600; }).filter(v=>v!=null);
-    const fullDay = {hours: full, tmin: fullT.length ? Math.min(...fullT) : tmin, tmax: fullT.length ? Math.max(...fullT) : tmax, pEarly, pLate};
+    const fullDay = {hours: full, tmin: fullT.length ? Math.min(tmin, ...fullT) : tmin, tmax: fullT.length ? Math.max(tmax, ...fullT) : tmax, pEarly, pLate};
     const nightP = (pEarly||0) + (pLate||0);
     // Modellstreuung + Einzelwerte
     const lead = Math.max(0, Math.floor((iS - nowIdx)/24));
@@ -900,7 +900,7 @@ function condition({cloud, psum, pprob, thunder, fog, temp, isDay, hourly}){
   if(thunder >= 0.3 && (pprob>=0.35)) return {k:'thunder', txt:'Gewitter'};
   if(wet) return snow ? {k:'snow', txt: psum>(hourly?1.5:8)? 'Starker Schneefall':'Schnee'}
                       : {k:'rain', n, txt: psum>(hourly?2.5:10)? 'Starker Regen' : psum<(hourly?0.5:2) ? 'Leichter Regen' : 'Regen'};
-  if(showers) return snow ? {k:'snowshower', txt:'Schneeschauer möglich'} : {k:'showers', n: Math.min(n, 2), txt:'Schauer möglich'};
+  if(showers) return snow ? {k: isDay ? 'snowshower' : 'snowshowernight', txt:'Schneeschauer möglich'} : {k: isDay ? 'showers' : 'showersnight', n: Math.min(n, 2), txt:'Schauer möglich'};
   if(fog >= 0.4) return {k:'fog', txt:'Nebel'};
   if(cloud == null) return {k:'partly', txt:'–'};
   if(cloud < 20) return {k: isDay?'sun':'moon', txt: isDay?'Sonnig':'Klar'};
@@ -963,6 +963,7 @@ function icon(k, n){
     cloud: cloud(-1,1,1.1,DARK)+cloud(3,5,1.0),
     showers: sun(11,9,4.5)+cloud(3,2,1.05)+drops(n||2), rain: cloud(2,0,1.15,DARK)+drops(n||3),
     snow: cloud(2,0,1.15,DARK)+flakes, sleet: cloud(2,0,1.15,DARK)+`<line x1="9" y1="24" x2="7.5" y2="28.5" stroke="${DROP}" stroke-width="2.2" stroke-linecap="round"/><circle cx="14" cy="27" r="1.6" fill="#fff"/><line x1="21" y1="24" x2="19.5" y2="28.5" stroke="${DROP}" stroke-width="2.2" stroke-linecap="round"/>`, snowshower: sun(11,9,4.5)+cloud(3,2,1.05)+flakes,
+    showersnight: moon(10,8,5)+cloud(3,2,1.05)+drops(n||2), snowshowernight: moon(10,8,5)+cloud(3,2,1.05)+flakes,
     thunder: cloud(2,-1,1.15,DARK)+bolt, fog: cloud(2,0,1.1,DARK)+`<g stroke="#fff" stroke-width="2" stroke-linecap="round" opacity=".85"><line x1="5" y1="25" x2="27" y2="25"/><line x1="8" y1="29" x2="24" y2="29"/></g>`,
   }[k] || '';
   return `<svg viewBox="0 0 32 32">${inner}</svg>`;
@@ -984,7 +985,7 @@ function render(place, R){
   // Hintergrund
   const cls = [];
   if(!c.isDay) cls.push('night');
-  if(['rain','thunder','showers'].includes(hc.k)) cls.push('rain'); else if(hc.k.startsWith('snow') || hc.k === 'sleet') cls.push('snow'); else if(c.cloud>75 || hc.k==='fog') cls.push('overcast');
+  if(['rain','thunder','showers','showersnight'].includes(hc.k)) cls.push('rain'); else if(hc.k.startsWith('snow') || hc.k === 'sleet') cls.push('snow'); else if(c.cloud>75 || hc.k==='fog') cls.push('overcast');
   document.body.className = cls.join(' ') + (document.body.classList.contains('mapopen') ? ' mapopen' : '');
   requestAnimationFrame(() => { const c1 = getComputedStyle(document.body).getPropertyValue('--bg1').trim();
     if(c1){ document.querySelector('meta[name=theme-color]').setAttribute('content', c1); document.documentElement.style.background = c1; } });
@@ -1012,10 +1013,10 @@ function render(place, R){
     const l = (d.tmin-gMin)/span*100, w = (d.tmax-d.tmin)/span*100;
     const grad = `linear-gradient(90deg, ${tempColor(d.tmin)}, ${tempColor(d.tmax)})`;
     const dot = i===0 && !afterWin && c.temp!=null ? `<b style="left:calc(${clamp((c.temp-gMin)/span*100,0,100)}% - 4.5px)"></b>` : '';
-    const pp = d.pprob>=0.15 ? DROPSYM + Math.round(d.pprob*10)*10+'%' + (d.psum >= 0.1 ? `<span class="amt">${d.psum < 0.95 ? '<1' : Math.round(d.psum)} mm</span>` : '') : '';
+    const pp = d.pprob>=0.15 ? DROPSYM + Math.round(d.pprob*10)*10+'%' + (d.psum >= 0.1 ? `<span class="amt">${d.psum < 10 ? fmt1(d.psum) : Math.round(d.psum)} mm</span>` : '') : '';
     // „unsicher“ nur in den ersten 6 Tagen: danach ist jede Vorhersage unsicher, der Hinweis wäre nur Rauschen
     const night = d.range && i <= 5 && d.range.width >= 4.5 + 0.6*Math.max(0, i-2) ? `<div class="nightrain unsure">unsicher</div>`
-                : d.nightP!=null && d.nightP>=1 && d.pprob < 0.3 && d.psum < 0.5 ? `<div class="nightrain">Regen nachts</div>` : '';
+                : d.nightP!=null && d.nightP>=1 && d.pprob < 0.3 && d.psum < 0.5 ? `<div class="nightrain">Niederschlag nachts</div>` : '';
     return `<div class="row" data-i="${i}"><div class="d">${dayName(d.d,i)}${night}</div>${icon(d.cond.k, d.cond.n)}<div class="pp">${pp}</div>
       <div class="mn">${r0(d.tmin)}°</div><div class="bar"><i style="left:${l}%;width:${Math.max(w,3)}%;background:${grad}"></i>${dot}</div><div class="mx">${r0(d.tmax)}°</div></div>
       <div class="detail" id="det${i}"></div>`;
@@ -1053,7 +1054,7 @@ function render(place, R){
 
   <div class="card">
     <h3>${svgCal()} 10-Tage-Vorhersage · 8–20 Uhr</h3>
-    <div class="legend">${DROPSYM} Regenwahrscheinlichkeit zwischen 8 und 20 Uhr</div>
+    <div class="legend">${DROPSYM} Niederschlagswahrscheinlichkeit zwischen 8 und 20 Uhr</div>
     <div class="days">${histRow(R, gMin, gMax)}${days}</div>
   </div>
 
@@ -1095,7 +1096,7 @@ function render(place, R){
       <p><b>Fehler:</b> So weit lag das Modell hier in den letzten 4 Wochen im Schnitt daneben (Temperatur für den nächsten Tag, nach Ortskorrektur).</p>
       <p><b>Anteil:</b> wie stark das Modell in die App-Prognose eingeht. In den ersten Tagen zählt die Mischung, die hier zuletzt am besten traf, getrennt für Tag und Nacht. Ab Tag 6 zählt vor allem ECMWF AIFS, langfristig das stärkste Modell für Deutschland.</p>
       <p><b>Tageswerte</b> gelten für 8–20 Uhr. Tippe auf einen Tag für Details und alle Modelle.</p>
-      <p><b>Regenwahrscheinlichkeit und Spannen</b> stammen aus ${Object.values(R.members).reduce((s,m)=>s+m.P.length,0)} leicht variierten Rechenläufen von Google, ECMWF und DWD.${R.ST && R.ST.elev!=null ? ` Ort auf ${Math.round(R.ST.elev)} m Höhe${R.ST.hilly? '; im bergigen Gelände zählen fein aufgelöste Modelle (ICON-D2, AROME) in den ersten Tagen mehr':''}.`:''}</p>
+      <p><b>Niederschlagswahrscheinlichkeit und Spannen</b> stammen aus ${Object.values(R.members).reduce((s,m)=>s+m.P.length,0)} leicht variierten Rechenläufen von Google, ECMWF und DWD.${R.ST && R.ST.elev!=null ? ` Ort auf ${Math.round(R.ST.elev)} m Höhe${R.ST.hilly? '; im bergigen Gelände zählen fein aufgelöste Modelle (ICON-D2, AROME) in den ersten Tagen mehr':''}.`:''}</p>
       <p class="muted">Google WeatherNext liefert keine Archivdaten; es geht mit festem Anteil ein und erhält die durchschnittliche Ortskorrektur der anderen Modelle.</p>
       ${R.per[MOS.id] && R.mos ? `<p class="muted"><b>DWD MOSMIX</b> ist keine eigene Modellrechnung, sondern die vom Deutschen Wetterdienst statistisch an Messstationen angepasste Vorhersage (Station ${esc(umlaut(String(R.mos.src.name).toLowerCase().replace(/(^|[\s-])\S/g, c => c.toUpperCase())))}, ${fmt1(R.mos.src.dist)} km). Für sie gibt es noch keine Archivdaten zur Prüfung; bis dahin zählt sie wie ein durchschnittliches Modell (rund 11 %).</p>` : ''}
     </div>
@@ -1126,7 +1127,7 @@ function histRow(R, gMin, gMax){
   const d = H.days[H.days.length-1], o = d.o, span = Math.max(1, gMax - gMin);
   const yest = new Date(Date.parse(R.days[0].d + 'T12:00:00Z') - 864e5).toISOString().slice(0,10);
   const l = clamp((o.tmin-gMin)/span*100, 0, 100), w = clamp((o.tmax-o.tmin)/span*100, 3, 100 - l);
-  const rain = o.rain != null && o.rain >= 0.1 ? `<span class="amt">${o.rain < 0.95 ? '<1' : Math.round(o.rain)} mm</span>` : '';
+  const rain = o.rain != null && o.rain >= 0.1 ? `<span class="amt">${o.rain < 10 ? fmt1(o.rain) : Math.round(o.rain)} mm</span>` : '';
   return `<div class="row past"><div class="d">${d.d === yest ? 'Gestern' : WD[new Date(d.d+'T12:00:00Z').getUTCDay()]}<div class="nightrain">gemessen</div></div><div class="ist"></div><div class="pp">${rain}</div>
     <div class="mn">${r0(o.tmin)}°</div><div class="bar"><i style="left:${l}%;width:${w}%;background:linear-gradient(90deg,${tempColor(o.tmin)},${tempColor(o.tmax)})"></i></div><div class="mx">${r0(o.tmax)}°</div></div>
     <div class="detail" id="detH"></div>`;
@@ -1183,9 +1184,9 @@ function histDetail(H, k){
   const mm = v => v == null ? '–' : v < 0.05 ? 'trocken' : fmt1(v) + ' mm';
   const dv = (a, b) => { const x = Math.round(a) - Math.round(b); return x === 0 ? 'getroffen' : `${Math.abs(x)}° zu ${x > 0 ? 'warm' : 'kalt'}`; };
   const wetO = o.rain != null && o.rain >= 0.5, wetF = f.rain != null && f.rain >= 0.5;
-  const rainV = o.rain == null || f.rain == null ? '' : wetO === wetF ? (wetO ? 'Regen richtig vorhergesagt' : 'kein nennenswerter Regen, wie vorhergesagt')
-    : wetO ? (f.rain >= 0.1 ? 'mehr Regen als vorhergesagt' : 'Regen nicht vorhergesagt')
-           : (o.rain >= 0.05 ? 'weniger Regen als vorhergesagt' : 'Regen vorhergesagt, blieb aber trocken');
+  const rainV = o.rain == null || f.rain == null ? '' : wetO === wetF ? (wetO ? 'Niederschlag richtig vorhergesagt' : 'kein nennenswerter Niederschlag, wie vorhergesagt')
+    : wetO ? (f.rain >= 0.1 ? 'mehr Niederschlag als vorhergesagt' : 'Niederschlag nicht vorhergesagt')
+           : (o.rain >= 0.05 ? 'weniger Niederschlag als vorhergesagt' : 'Niederschlag vorhergesagt, blieb aber trocken');
   const nm = id => (MODELS.find(m => m.id === id) || {name:id}).name;
   const err = m => Math.abs(m.tmax - o.tmax) + Math.abs(m.tmin - o.tmin);
   // Platzierung nach Treffsicherheit (Abweichung bei Hoch + Tief), die App-Prognose zählt mit
@@ -1337,8 +1338,9 @@ function certainty(d){
   const wet = d.byModel.filter(x => x.psum != null && x.psum >= 1), dry = d.byModel.filter(x => x.psum != null && x.psum < 0.2);
   const names = a => a.map(x => x.m.name).join(', ');
   let rain = '';
-  if(wet.length && dry.length) rain = `Uneinig beim Regen: ${wet.length} von ${d.byModel.length} Modellen erwarten Regen (${names(wet)}), ${dry.length} bleiben trocken.`;
-  else if(wet.length === d.byModel.length) rain = 'Alle Modelle erwarten Regen.';
+  const few = d.byModel.length - wet.length - dry.length;   // dazwischen: nur wenig (0,2–1 mm)
+  if(wet.length && dry.length) rain = `Uneinig beim Niederschlag: ${wet.length} von ${d.byModel.length} Modellen erwarten mindestens 1 mm (${names(wet)}), ${dry.length} ${dry.length === 1 ? 'bleibt' : 'bleiben'} trocken${few ? `, ${few} ${few === 1 ? 'erwartet' : 'erwarten'} nur wenig` : ''}.`;
+  else if(wet.length === d.byModel.length) rain = 'Alle Modelle erwarten Niederschlag.';
   else if(dry.length === d.byModel.length) rain = 'Alle Modelle bleiben trocken.';
   if(rain) parts.push(`<div class="dline">${rain}</div>`);
   const s = d.byModel.slice().sort((a,b)=>a.tmax-b.tmax);
@@ -1363,9 +1365,11 @@ function trackBlock(R){
   const where = `<b>${esc(st.name)}</b> (${st.by}, ${fmt1(st.dist)} km entfernt${st.elev!=null? ', '+Math.round(st.elev)+' m':''})`;
   let html = `<div class="explain"><p>Geprüft an echten Messwerten: ${where}.</p>`;
   if(S.cityBias != null && Math.abs(S.cityBias) >= 0.3)
-    html += `<p><b>Ortskorrektur:</b> Die Modelle lagen hier zuletzt im Schnitt ${fmt1(Math.abs(S.cityBias))}° zu ${S.cityBias<0?'kalt':'warm'}${S.nightBias!=null && S.cityBias<0 && S.nightBias < S.cityBias-0.3 ? `, nachts bis ${fmt1(Math.abs(S.nightBias))}°` : ''}. Das wird ausgeglichen, getrennt nach Tageszeit.</p>`;
+    html += `<p><b>Ortskorrektur:</b> Die Modelle lagen hier zuletzt im Schnitt ${fmt1(Math.abs(S.cityBias))}° zu ${S.cityBias<0?'kalt':'warm'}${S.nightBias!=null && S.cityBias<0 && S.nightBias < S.cityBias-0.3 ? `, nachts bis ${fmt1(Math.abs(S.nightBias))}°` : ''}. Das wird ausgeglichen, getrennt nach Tageszeit und Wetterlage (klare, windstille Stunden extra).</p>`;
+    if(S.windK && (Math.abs(S.windK.w - 1) >= 0.05 || Math.abs(S.windK.g - 1) >= 0.05))
+      html += `<p><b>Wind:</b> Wind und Böen werden an die Messungen der Station angepasst (zuletzt ${S.windK.w >= 1 ? 'stärker' : 'schwächer'} als vorhergesagt${Math.sign(S.windK.w - 1) !== Math.sign(S.windK.g - 1) ? `, Böen ${S.windK.g >= 1 ? 'stärker' : 'schwächer'}` : ''}).</p>`;
   if(S.rainK && Math.abs(1 - S.rainK) >= 0.15)
-    html += `<p><b>Regenkorrektur:</b> Die Modelle sagten hier zuletzt rund ${Math.round(Math.abs(1 - S.rainK)*100)} % ${S.rainK < 1 ? 'zu viel' : 'zu wenig'} Regen voraus. Die Mengen werden entsprechend angepasst.</p>`;
+    html += `<p><b>Niederschlagskorrektur:</b> Die Modelle sagten hier zuletzt rund ${Math.round(Math.abs(1 - S.rainK)*100)} % ${S.rainK < 1 ? 'zu viel' : 'zu wenig'} Niederschlag voraus. Die Mengen werden entsprechend angepasst.</p>`;
   html += `</div>`;
   if(T){
     const leads = T.leads || [{lead:1, ours:T.ours, avg:T.avg}];
@@ -1376,10 +1380,10 @@ function trackBlock(R){
         return `<div class="hrow"><div class="n">${l.lead === 1 ? '1 Tag' : l.lead + ' Tage'} im Voraus</div><div class="us">±${f1(l.ours)}°</div><div>±${f1(l.avg)}°</div><div class="${g > 0 ? 'plus' : ''}">${g > 0 ? g + ' %' : g === 0 ? 'gleich' : '–'}</div></div>`; }).join('');
     if(T.rain){
       const r = T.rain, bm = r.best && ALL_MODELS.find(m => m.id === r.best.id);
-      html += `<div class="hrow head" style="margin-top:10px"><div class="n">Regen ja/nein richtig</div><div>App</div><div>Modelle</div><div>bestes</div></div>
+      html += `<div class="hrow head" style="margin-top:10px"><div class="n">Niederschlag ja/nein richtig</div><div>App</div><div>Modelle</div><div>bestes</div></div>
         <div class="hrow"><div class="n">Tage von ${r.days}${bm ? `<span class="sub">bestes: ${shortName(bm)}</span>` : ''}</div><div class="us">${r.ours}</div><div>${r.avg}</div><div>${r.best ? r.best.hits : '–'}</div></div>`;
     }
-    html += `</div><div class="explain" style="padding-top:4px">Temperatur: mittlere Abweichung Stunde für Stunde (kleiner ist besser). Regen: an wie vielen Tagen „Regen“ oder „trocken“ zwischen 8 und 20 Uhr stimmte (ab 0,5 mm). Für jeden Tag wurde nur genutzt, was vorher bekannt war.</div>`;
+    html += `</div><div class="explain" style="padding-top:4px">Temperatur: mittlere Abweichung Stunde für Stunde (kleiner ist besser). Niederschlag: an wie vielen Tagen „Niederschlag“ oder „trocken“ zwischen 8 und 20 Uhr stimmte (ab 0,5 mm). Für jeden Tag wurde nur genutzt, was vorher bekannt war.</div>`;
   }
   return html;
 }
@@ -1421,7 +1425,7 @@ function ptypeAt(R, i, now){
 }
 function nowCond(R){
   const c = R.cur, hc = hourCond(c);
-  const radarWet = R.NC && R.NC.rateNow >= 0.1, wet = radarWet || ['rain','showers','snow','snowshower'].includes(hc.k);
+  const radarWet = R.NC && R.NC.rateNow >= 0.1, wet = radarWet || ['rain','showers','showersnight','snow','snowshower','snowshowernight'].includes(hc.k);
   if(!wet || hc.k === 'thunder') return hc;
   const P = ptypeAt(R, R.nowIdx, true), rate = radarWet ? R.NC.rateNow : (c.prcp || 0);
   const st = rate < 0.5 ? 'Leichter ' : rate >= 4 ? 'Starker ' : '';
@@ -1429,8 +1433,8 @@ function nowCond(R){
   if(P.noun === 'Schneeregen') return {k:'sleet', txt:'Schneeregen'};
   if(P.noun === 'gefrierender Regen') return {k:'rain', n:1, txt:'Gefrierender Regen – Glätte!'};
   if(P.noun === 'Graupel' || P.noun === 'Hagel') return {k:'snowshower', txt: P.noun};
-  if(P.noun === 'Regen') return ['rain','showers'].includes(hc.k) ? hc : {k:'rain', n: rate < 0.5 ? 1 : rate < 2.5 ? 2 : 3, txt: st + 'Regen'};
-  return ['rain','showers','snow','snowshower'].includes(hc.k) ? {...hc, txt:'Niederschlag'} : {k:'rain', n:1, txt:'Niederschlag'};
+  if(P.noun === 'Regen') return ['rain','showers','showersnight'].includes(hc.k) ? hc : {k:'rain', n: rate < 0.5 ? 1 : rate < 2.5 ? 2 : 3, txt: st + 'Regen'};
+  return ['rain','showers','showersnight','snow','snowshower','snowshowernight'].includes(hc.k) ? {...hc, txt:'Niederschlag'} : {k:'rain', n:1, txt:'Niederschlag'};
 }
 // wenn die gemessene Niederschlagsart nachträglich eintrifft: Text, Symbol und Satz anpassen
 function applyNowCond(){
@@ -1450,7 +1454,7 @@ function alertsBlock(R, AQ){
     const wetBefore = H.slice(Math.max(0, i0 - 6), i0 + 1).reduce((a,h) => a + (h.prcp||0), 0) >= 0.3;
     const wetCold = cold.some(h => (h.prcp||0) >= 0.1 && h.pr >= 0.3);
     const tmin = Math.min(...nx.map(h => h.temp)), first = cold[0].t.slice(11,13);
-    if(wetBefore || wetCold) out.push(['ice', first === R.hourly[i0].t.slice(11,13) ? 'Jetzt Glätte möglich' : `Glätte möglich ab etwa ${first} Uhr`, wetCold ? 'Schnee oder Regen bei Frost' : 'nasse Straßen gefrieren']);
+    if(wetBefore || wetCold) out.push(['ice', first === R.hourly[i0].t.slice(11,13) ? 'Jetzt Glätte möglich' : `Glätte möglich ab etwa ${first} Uhr`, wetCold ? 'Niederschlag bei Frost' : 'nasse Straßen gefrieren']);
     else if(tmin <= -0.5) out.push(['frost', `Frost bis ${r0(tmin)}°`, `ab etwa ${first} Uhr`]);
   }
   if(AQ && AQ.hourly){
@@ -1656,7 +1660,7 @@ async function load(force){
     const show = d => {
       state.warn = '';
       if(state.stale) state.warn = 'Keine Verbindung – du siehst den Stand von ' + hhmm(state.dataTime) + '. Zum Aktualisieren nach unten ziehen.';
-      else if(d.errs && d.errs.length) state.warn = 'Die Ensemble-Läufe sind gerade nicht erreichbar. Die Vorhersage läuft, nur Regenwahrscheinlichkeit und Spannen sind ungenauer.';
+      else if(d.errs && d.errs.length) state.warn = 'Die Ensemble-Läufe sind gerade nicht erreichbar. Die Vorhersage läuft, nur Niederschlagswahrscheinlichkeit und Spannen sind ungenauer.';
       const R = build(d); state.res = R; render(p, R);
     };
     show(data); ptrDone();
