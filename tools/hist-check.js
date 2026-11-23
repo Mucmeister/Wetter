@@ -33,7 +33,7 @@ const PLACES = [['Hamburg', 53.551, 9.994], ['Bremen', 53.075, 8.807], ['Berlin'
         const W = {}; for(const m of MODELS) if(Ww[m.id]) W[m.id] = {t: Ww[m.id].t, bias: Ww[m.id].bias, tw: Ww[m.id].tw};
         days.push({d: D.lday[s0], o, mods, app: win(alt.app), eq: win(alt.eq), nobias: win(alt.nobias), W});
       }
-      return {useStack: ST.useStack, station: ST.station, track: ST.track && {ours: ST.track.ours, avg: ST.track.avg, models: ST.track.models, leads: ST.track.leads}, days};
+      return {standing: ST.hist.standing, tmd: state.res.days.slice(0,3).map(d=>[d.d,+d.tmin.toFixed(1),+d.tmax.toFixed(1)]), useStack: ST.useStack, station: ST.station, track: ST.track && {ours: ST.track.ours, avg: ST.track.avg, models: ST.track.models, leads: ST.track.leads}, days};
     });
     console.log(JSON.stringify({name, errs: errs.slice(0,3), ...r}));
     await pg.close();

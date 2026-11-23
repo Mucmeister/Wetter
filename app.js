@@ -36,7 +36,7 @@ const BUCKETS = [{k:'d1', off:1, from:0, to:1, label:'0–1'}, {k:'d2', off:2, f
 const bucketFor = d => BUCKETS.find(b => d >= b.from && d <= b.to);
 
 const DEMO = location.hash === '#demo';
-const BUILD = '2026-11-22.19';   // bei jeder Änderung erhöhen (gleich wie version.txt)
+const BUILD = '2026-11-23.1';   // bei jeder Änderung erhöhen (gleich wie version.txt)
 // Neue Version automatisch laden, sobald die App wieder geöffnet wird
 async function checkUpdate(){
   try{ const v = (await fetch('version.txt?' + Date.now(), {cache:'no-store'}).then(r => r.ok ? r.text() : '')).trim();
@@ -96,6 +96,7 @@ const PAST_DAYS = 46;           // so weit zurück werden alte Vorhersagen gehol
 const WINDOW_DAYS = 30;         // Lernfenster für Korrektur und Gewichte
 const TRACK_DAYS = 14;          // Trefferbilanz: letzte 14 Tage
 const HIST_DAYS = 7;           // Rückblick: letzte 7 Tage
+const STAND_DAYS = 14;         // Bilanz im Rückblick: letzte 14 Tage
 const LMU = {lat:48.1481, lon:11.5733, radiusKm:12};   // Innenstadt-Station Theresienstraße
 
 const km = (a,b,c,d) => { const r=Math.PI/180, x=(d-b)*r*Math.cos((a+c)/2*r), y=(c-a)*r; return Math.sqrt(x*x+y*y)*6371; };
@@ -361,6 +362,36 @@ function weightsFrom(S, hilly){
   return W;
 }
 
+// ===== Hoch und Tief direkt: Abweichung jedes Modells beim Tageshöchst- und -tiefstwert (8–20 Uhr) =====
+// Rückrechnung 23 Orte × 60 Tage: Hälfte Tageskurve + Hälfte direkt korrigierte Modell-Extreme
+// senkt den Fehler bei Hoch+Tief um ca. 4 % (1,86° → 1,78°), besser an 22 von 23 Orten (Vorlauf 1, 2 und 4 Tage).
+const winExt = (A, s) => { const v = []; for(let i=s+WIN_START;i<=s+WIN_END;i++) if(A[i]!=null) v.push(A[i]); return v.length >= 10 ? [Math.min(...v), Math.max(...v)] : null; };
+function extStats(D, key, end){
+  const days = [];
+  for(let s=Math.max(1, end - WINDOW_DAYS*24); s+WIN_END < end; s++) if(D.lh[s] === 0 && D.past[s+WIN_END]){ const o = winExt(D.obsT, s); if(o) days.push([s, o]); }
+  const X = {lo:{}, hi:{}};
+  for(const k of [0, 1]){
+    const st = [];
+    for(const m of MODELS){ const F = D.per[m.id]?.[key]; if(!F) continue;
+      const e = []; for(const [s, o] of days){ const f = winExt(F, s); if(f) e.push(f[k] - o[k]); }
+      if(e.length < 10) continue;
+      const b = e.reduce((a,x)=>a+x,0)/(e.length+3);
+      st.push([m, b, mean(e.map(x => Math.abs(x - b)))]); }
+    if(st.length < 3) return null;
+    const md = median(st.map(x => x[2]));
+    for(const [m, b, mae] of st) X[k ? 'hi' : 'lo'][m.id] = [b, m.prior * clamp(Math.pow(md/Math.max(mae, 0.15), 2), 0.35, 2.5)];
+  }
+  return X;
+}
+// Mittel der korrigierten Modell-Extreme; ext = {id: [tief, hoch]} (Rohwerte der Modelle)
+function extBlend(X, ext){
+  const out = [];
+  for(const [k, key] of [[0,'lo'], [1,'hi']]){ let sw = 0, sv = 0, n = 0;
+    for(const id in ext){ const c = X[key][id]; if(!c || !ext[id]) continue; sw += c[1]; sv += c[1]*(ext[id][k] - c[0]); n++; }
+    if(n < 3) return null; out.push(sv/sw); }
+  return out;
+}
+
 async function computeAllStats(lat, lon, offSec){
   const u = urls(lat, lon), offH = Math.round(offSec/3600);
   const [prev, el] = await Promise.all([getJSON(u.prev, 30000), getJSON(u.elev).catch(() => null)]);
@@ -471,7 +502,7 @@ async function computeAllStats(lat, lon, offSec){
     const starts = [];
     for(let i=1;i<D.n;i++) if(D.lh[i] === 0 && D.past[i] && i+23 < D.n && D.past[i+23]) starts.push(i);
     const out = [];
-    for(const s0 of starts.slice(-HIST_DAYS)){
+    for(const s0 of starts.slice(-STAND_DAYS)){
       if(s0 < 20*24) continue;
       await new Promise(r => setTimeout(r, 0));
       const Ww = weightsAt(D, s0, hilly, useStack);
@@ -489,6 +520,10 @@ async function computeAllStats(lat, lon, offSec){
       const rsum = a => { const v = a.slice(WIN_START+1, WIN_END+1); return v.filter(x => x!=null).length >= 10 ? v.reduce((t,x) => t + (x||0), 0) : null; };
       const o = win(obsH), f = win(ourH);
       if(!o || !f) continue;
+      const XS = extStats(D, 'temperature_2m_previous_day1', s0), xe = {};
+      for(const m of MODELS){ const T = D.per[m.id]?.temperature_2m_previous_day1; if(T) xe[m.id] = winExt(T, s0); }
+      const xb = XS && extBlend(XS, xe);
+      if(xb){ f.tmin = (f.tmin + xb[0])/2; f.tmax = (f.tmax + xb[1])/2; }
       const models = [];
       for(const m of MODELS){
         const T = D.per[m.id]?.temperature_2m_previous_day1, P = D.per[m.id]?.precipitation_previous_day1; if(!T) continue;
@@ -497,9 +532,18 @@ async function computeAllStats(lat, lon, offSec){
       }
       out.push({d: D.lday[s0], obsH, obsP, ourH, ourP, o: {...o, rain: rsum(obsP)}, f: {...f, rain: rsum(ourP)}, models});
     }
-    if(out.length) hist = {days: out};
+    if(out.length){
+      // Bilanz: mittlere Abweichung bei Hoch + Tief über die letzten 14 Tage, App-Prognose gegenüber den Modellen
+      const sc = (get) => { const e = out.map(d => { const v = get(d); return v ? Math.abs(v.tmin - d.o.tmin) + Math.abs(v.tmax - d.o.tmax) : null; }).filter(x => x != null);
+        return e.length >= Math.min(10, out.length) ? mean(e) : null; };
+      const app = sc(d => d.f), others = MODELS.map(m => sc(d => d.models.find(x => x.id === m.id))).filter(x => x != null);
+      const standing = out.length >= 10 && app != null && others.length >= 3 ? {place: 1 + others.filter(x => x < app).length, of: others.length + 1, days: out.length} : null;
+      hist = {days: out.slice(-HIST_DAYS), standing};
+    }
   }
-  return {W, track, cityBias, nightBias, elev, hilly, rainK: kNow, hist, useStack,
+  const XT = {};
+  if(station) for(const b of BUCKETS.filter(b => b.k !== 'd6')) XT[b.k] = extStats(D, `temperature_2m_previous_day${b.off}`, D.n);
+  return {W, track, cityBias, nightBias, elev, hilly, rainK: kNow, hist, useStack, XT,
           station: station ? {name:station.name, by:station.by, dist:station.dist, elev:station.elev} : null};
 }
 
@@ -601,7 +645,7 @@ function build(data){
     // Regenwahrscheinlichkeit dieser Stunde
     const pr = rainProb(i, i, 0.1);
     const isDay = (() => { for(const m of MODELS){ const v = per[m.id]?.is_day?.[i]; if(v!=null) return v; } const h=+t.slice(11,13); return h>=7&&h<18?1:0; })();
-    return {t, i, temp, prcp, cloud, pr, isDay, thunder: wsum? th/wsum : 0, fog: wsum? fog/wsum:0,
+    return {t, i, temp, base: temp, prcp, cloud, pr, isDay, thunder: wsum? th/wsum : 0, fog: wsum? fog/wsum:0,
       feels: blend('apparent_temperature', i, 't'), wind: blend('wind_speed_10m', i, 't'),
       gust: blend('wind_gusts_10m', i, 't'), rh: blend('relative_humidity_2m', i, 't'), sun: blend('sunshine_duration', i, 't'), pres: blend('pressure_msl', i, 'p'), wdir: blendDir(i)};
   });
@@ -698,8 +742,15 @@ function build(data){
     const win = hourly.slice(iS, iE+1);             // Momentanwerte 8:00–20:00
     const acc = hourly.slice(iS+1, iE+1);           // Niederschlag 8–20 (Stundensummen bis 9..20 Uhr)
     if(!win.some(h => h.temp != null)) return null;
-    const tmax = Math.max(...win.map(h=>h.temp).filter(v=>v!=null));
-    const tmin = Math.min(...win.map(h=>h.temp).filter(v=>v!=null));
+    let tmax = Math.max(...win.map(h=>h.temp).filter(v=>v!=null));
+    let tmin = Math.min(...win.map(h=>h.temp).filter(v=>v!=null));
+    // Hoch/Tief: Hälfte Tageskurve, Hälfte direkt korrigierte Modell-Extreme (nur für Tage, die noch nicht begonnen haben)
+    const XT = ST && ST.XT && ST.XT[bucketFor(Math.max(0, Math.floor((iS - nowIdx)/24))).k];
+    if(XT && iS > nowIdx){
+      const xe = {}; for(const m of avail) if(raw[m.id]) xe[m.id] = winExt(raw[m.id], iS - WIN_START);
+      const xb = extBlend(XT, xe), bv = win.map(h=>h.base).filter(v=>v!=null);
+      if(xb && bv.length){ tmin += (xb[0] - Math.min(...bv))/2; tmax += (xb[1] - Math.max(...bv))/2; }
+    }
     const psum = acc.reduce((s,h)=>s+(h.prcp||0),0);
     const pprob = rainProb(iS+1, iE, 0.5);
     const cloud = mean(win.map(h=>h.cloud));
@@ -1122,6 +1173,7 @@ function histDetail(H, k){
   return `${nav}
     ${histChart(d)}
     <div class="dline">App-Prognose: Höchstwert ${dv(f.tmax, o.tmax)}, Tiefstwert ${dv(f.tmin, o.tmin)}${rainV ? ', ' + rainV : ''}.</div>
+    ${H.standing ? `<div class="dline" style="margin-top:6px">Bilanz der letzten ${H.standing.days} Tage (Hoch und Tief): App-Prognose auf <b>Platz ${H.standing.place} von ${H.standing.of}</b>.</div>` : ''}
     <div class="dsec">Vorhersagen vom Vortag (8–20 Uhr)</div>
     <div class="hrow head"><div class="n"></div><div>Tief</div><div>Hoch</div><div>mm</div></div>
     <div class="hrow obs"><div class="n"><i class="rank"></i>Gemessen</div><div>${r0(o.tmin)}°</div><div>${r0(o.tmax)}°</div><div>${o.rain == null ? '–' : fmt1(o.rain)}</div></div>
