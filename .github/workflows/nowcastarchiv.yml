@@ -1,0 +1,25 @@
+name: Radar-Trend sammeln
+on:
+  schedule: [{cron: '17 */2 * * *'}]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency: {group: nowcast-${{ github.run_id }}}
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          pip -q install numpy >/dev/null 2>&1
+          python3 tools/nowcast-collect.py || exit 0
+          [ -f case.json ] || exit 0
+          F=$(python3 -c "import json;print(json.load(open('case.json'))['t0'].replace(':','')[:15])").json
+          for i in 1 2 3 4 5; do
+            rm -rf arch; git clone -q --depth 1 -b nowcastarchiv "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" arch 2>/dev/null \
+              || (mkdir arch && cd arch && git init -q -b nowcastarchiv && git remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git")
+            mkdir -p arch/data && cp case.json arch/data/$F
+            cd arch && git add -A && git -c user.name=bot -c user.email=bot@users.noreply.github.com commit -qm "Fall $F" && git push -q origin nowcastarchiv && exit 0
+            cd ..; sleep $((RANDOM % 30 + 10))
+          done
