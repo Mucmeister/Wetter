@@ -19,7 +19,7 @@ const ONLY = (process.env.ONLY || '').split(',').filter(Boolean);
       for(const r of await pg.$$('.days .row')){ try{ await r.click({timeout:2000}); await pg.waitForTimeout(120); }catch(e){} }
       const t = await pg.$('#howToggle'); if(t){ await t.click(); await pg.waitForTimeout(200); }
       const res = await pg.evaluate(AUD);
-      const info = await pg.evaluate(() => ({build: BUILD, st: state.res.ST && state.res.ST.station && state.res.ST.station.name, n: state.res.avail.length, hero: (document.querySelector('#hero .cond')||{}).innerText}));
+      const info = await pg.evaluate(() => ({build: BUILD, st: state.res.ST && state.res.ST.station && state.res.ST.station.name, n: state.res.avail.length, hero: (document.querySelector('#hero .cond')||{}).innerText, d6: state.res.days[6] && state.res.days[6].byModel.map(x => x.m.name.slice(0,10) + ' ' + Math.round(x.share*100)).join(', ')}));
       console.log(JSON.stringify({name, ...info, errs, issues: res}));
     }catch(e){ console.log(JSON.stringify({name, fail: String(e).slice(0,200), errs})); }
     await pg.close();

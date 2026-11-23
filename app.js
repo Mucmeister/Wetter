@@ -36,7 +36,7 @@ const BUCKETS = [{k:'d1', off:1, from:0, to:1, label:'0–1'}, {k:'d2', off:2, f
 const bucketFor = d => BUCKETS.find(b => d >= b.from && d <= b.to);
 
 const DEMO = location.hash === '#demo';
-const BUILD = '2026-11-23.6';   // bei jeder Änderung erhöhen (gleich wie version.txt)
+const BUILD = '2026-11-23.7';   // bei jeder Änderung erhöhen (gleich wie version.txt)
 // Neue Version automatisch laden, sobald die App wieder geöffnet wird
 async function checkUpdate(){
   try{ const v = (await fetch('version.txt?' + Date.now(), {cache:'no-store'}).then(r => r.ok ? r.text() : '')).trim();
@@ -291,6 +291,20 @@ const STACK_A = 0.75;             // 75 % optimale Mischung, 25 % bisherige Gewi
 // dazu Ensemble-Mittel (WeatherNext 2) und ECMWF IFS.
 const LONG_W = {ecmwf_aifs025_single:0.38, google_weathernext2_ensemble:0.22, ecmwf_ifs:0.15, dwd_icon_seamless:0.08,
                 ukmo_seamless:0.06, ncep_aigfs025:0.06, ncep_gfs_seamless:0.05, meteofrance_seamless:0.03};
+// Ab Tag 4: halb örtlich gemessene Gewichte (Tag 4–5), halb Langfrist-Gewichte. Rückrechnung 23 Orte, Vorlauf 4–7 Tage:
+// besser als rein örtlich an 18–20 von 23 Orten und besser als rein langfristig (Fehler Tag 6: 1,523° örtlich, 1,518° langfristig, 1,507° halb/halb).
+// WeatherNext und MOSMIX behalten ihren festen Anteil.
+function longMix(W){
+  const ms = MODELS.filter(m => W.d4[m.id]);
+  const lt = ms.reduce((a,m) => a + (LONG_W[m.id] ?? 0.03), 0);
+  const loc = [0, 1].map(dn => { const v = ms.map(m => W.d4[m.id].tw ? W.d4[m.id].tw[dn] : W.d4[m.id].t), t = v.reduce((a,c)=>a+c,0) || 1; return v.map(x => x/t); });
+  for(const k of ['d4', 'd6']){
+    const rest = 1 - WN_SHARE - MOS_SHARE[k];
+    ms.forEach((m, j) => { const lg = (LONG_W[m.id] ?? 0.03)/lt; if(W[k][m.id]) W[k][m.id].tw = [0, 1].map(dn => rest*(0.5*loc[dn][j] + 0.5*lg)); });
+    if(W[k][WN.id]) W[k][WN.id].tw = [WN_SHARE, WN_SHARE];
+    if(W[k][MOS.id]) W[k][MOS.id].tw = [MOS_SHARE[k], MOS_SHARE[k]];
+  }
+}
 function nnls(A, b, k){                 // nichtnegative kleinste Quadrate über die Normalgleichungen (k ≤ 8)
   const w = new Array(k).fill(1/k);
   for(let it=0; it<400; it++){
@@ -434,7 +448,7 @@ async function computeAllStats(lat, lon, offSec){
   const kNow = station ? rainK(Infinity) : 1;
   const all = statsWindow(D, Math.max(0, D.n - WINDOW_DAYS*24), D.n, !!station);
   const W = weightsFrom(all, hilly);
-  if(station) stackInto(W, D, all, Math.max(0, D.n - WINDOW_DAYS*24), D.n, ['d1','d2','d4']);
+  if(station){ stackInto(W, D, all, Math.max(0, D.n - WINDOW_DAYS*24), D.n, ['d1','d2','d4']); longMix(W); }
   // Ortskorrektur in Worten: mittlere Abweichung der Modelle bei 1 Tag Vorlauf
   const cityBias = station ? median(MODELS.map(m => all[m.id]?.d1 ? mean(all[m.id].d1.bias) : null)) : null;
   const nightBias = station ? median(MODELS.map(m => all[m.id]?.d1 ? Math.min(...all[m.id].d1.bias.slice(0,2)) : null)) : null;
@@ -1099,7 +1113,7 @@ function render(place, R){
     ${modelTable(R)}
     <div class="explain">
       <p><b>Fehler:</b> So weit lag das Modell hier in den letzten 4 Wochen im Schnitt daneben (Temperatur für den nächsten Tag, nach Ortskorrektur).</p>
-      <p><b>Anteil:</b> wie stark das Modell in die App-Prognose eingeht. In den ersten Tagen zählt die Mischung, die hier zuletzt am besten traf, getrennt für Tag und Nacht. Ab Tag 6 zählt vor allem ECMWF AIFS, langfristig das stärkste Modell für Deutschland.</p>
+      <p><b>Anteil:</b> wie stark das Modell in die App-Prognose eingeht. In den ersten Tagen zählt die Mischung, die hier zuletzt am besten traf, getrennt für Tag und Nacht. Ab Tag 4 zählt je zur Hälfte diese örtliche Mischung und die langfristig beste Gewichtung für Deutschland (vorn ECMWF AIFS). Das traf in der Rückrechnung an 23 Orten besser als jede der beiden allein. „Tag“ meint dabei Stunden ab jetzt: Tag 4 beginnt 4 × 24 Stunden später.</p>
       <p><b>Tageswerte</b> gelten für 8–20 Uhr. Tippe auf einen Tag für Details und alle Modelle.</p>
       <p><b>Niederschlagswahrscheinlichkeit und Spannen</b> stammen aus ${Object.values(R.members).reduce((s,m)=>s+m.P.length,0)} leicht variierten Rechenläufen von Google, ECMWF und DWD. Die Sicherheit der Temperatur richtet sich nach der Breite der Spanne, in der 8 von 10 Läufen liegen: bis 1,5° sehr sicher, bis 3° sicher, bis 4,5° etwas unsicher, bis 6° unsicher, darüber sehr unsicher (für heute keine Angabe).${R.ST && R.ST.elev!=null ? ` Ort auf ${Math.round(R.ST.elev)} m Höhe${R.ST.hilly? '; im bergigen Gelände zählen fein aufgelöste Modelle (ICON-D2, AROME) in den ersten Tagen mehr':''}.`:''}</p>
       <p class="muted">Google WeatherNext liefert keine Archivdaten; es geht mit festem Anteil ein und erhält die durchschnittliche Ortskorrektur der anderen Modelle.</p>
@@ -1402,7 +1416,7 @@ function modelTable(R){
   const g = (bk, id) => { const e = R.W[bk][id]; return e.tw ? (e.tw[0] + e.tw[1])/2 : e.t; };
   const share = (bk, id) => { const tot = R.avail.reduce((s,x)=>s+g(bk, x.id),0); return g(bk, id)/tot; };
   const list = R.avail.slice().sort((a,b)=>share('d1',b.id)-share('d1',a.id));
-  const mx = Math.max(...list.flatMap(m => [share('d1',m.id), share('d6',m.id)]));
+  const mx = Math.max(...list.flatMap(m => [share('d1',m.id), share('d4',m.id)]));
   const cell = (bk, m) => inflCell(share(bk, m.id), mx);
   const G = 'style="grid-template-columns:minmax(0,1fr) 58px 58px 58px"';
   const rows = list.map(m => {
@@ -1410,10 +1424,10 @@ function modelTable(R){
     return `<div class="mrow" ${G}>
       <div class="n">${mLabel(m)}</div>
       <div class="r">${err!=null? '±'+fmt1(err)+'°' : '<span class="muted">–</span>'}</div>
-      ${cell('d1', m)}${cell('d6', m)}</div>`;
+      ${cell('d1', m)}${cell('d4', m)}</div>`;
   }).join('');
   return `<div style="padding:4px 16px 0">
-    <div class="mrow head" ${G}><div>Modell</div><div class="r">Fehler</div><div>Anteil<br>1–2 Tage</div><div>Anteil<br>ab Tag 6</div></div>
+    <div class="mrow head" ${G}><div>Modell</div><div class="r">Fehler</div><div>Anteil<br>1–2 Tage</div><div>Anteil<br>ab Tag 4</div></div>
     ${rows}</div>`;
 }
 
