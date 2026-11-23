@@ -4,7 +4,6 @@ on:
   workflow_dispatch:
 permissions:
   contents: write
-concurrency: {group: nowcast-${{ github.run_id }}}
 jobs:
   run:
     runs-on: ubuntu-latest
