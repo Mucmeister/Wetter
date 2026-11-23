@@ -36,7 +36,7 @@ const BUCKETS = [{k:'d1', off:1, from:0, to:1, label:'0–1'}, {k:'d2', off:2, f
 const bucketFor = d => BUCKETS.find(b => d >= b.from && d <= b.to);
 
 const DEMO = location.hash === '#demo';
-const BUILD = '2026-11-23.1';   // bei jeder Änderung erhöhen (gleich wie version.txt)
+const BUILD = '2026-11-23.2';   // bei jeder Änderung erhöhen (gleich wie version.txt)
 // Neue Version automatisch laden, sobald die App wieder geöffnet wird
 async function checkUpdate(){
   try{ const v = (await fetch('version.txt?' + Date.now(), {cache:'no-store'}).then(r => r.ok ? r.text() : '')).trim();
@@ -107,6 +107,7 @@ function urls(lat, lon){
   const prevVars = ['temperature_2m','precipitation'];
   for(const v of ['temperature_2m','precipitation']) for(const b of BUCKETS) prevVars.push(`${v}_previous_day${b.off}`);
   prevVars.push('temperature_2m_previous_day3', 'temperature_2m_previous_day5');   // nur für die Trefferbilanz in 3 und 5 Tagen
+  prevVars.push('cloud_cover_previous_day1', 'wind_speed_10m_previous_day1', 'wind_gusts_10m_previous_day1');   // Wetterlage und Wind-Korrektur
   // Geländeprüfung: Ort + 6 Punkte im Abstand von ~15 km
   const ring = [[0,0]].concat([0,60,120,180,240,300].map(a => [Math.cos(a*Math.PI/180)*0.135, Math.sin(a*Math.PI/180)*0.135/Math.cos(lat*Math.PI/180)]));
   return {
@@ -213,7 +214,7 @@ async function loadObs(lat, lon, elev){
   const same = s => (pick.dwd_station_id && s.dwd_station_id === pick.dwd_station_id) || (pick.wmo_station_id && s.wmo_station_id === pick.wmo_station_id);
   const ids = new Set(src.filter(same).map(s => s.id));
   const obs = new Map();
-  for(const w of j.weather || []) if(ids.has(w.source_id) && w.temperature != null) obs.set(w.timestamp.slice(0,13), {t:w.temperature, p:w.precipitation});
+  for(const w of j.weather || []) if(ids.has(w.source_id) && w.temperature != null) obs.set(w.timestamp.slice(0,13), {t:w.temperature, p:w.precipitation, w:w.wind_speed, g:w.wind_gust_speed});
   if(obs.size < 24*10) return null;
   const named = src.find(s => same(s) && s.observation_type === 'historical') || pick;   // ausgeschriebener Name statt Kürzel
   return {name: named.station_name, by:'Deutscher Wetterdienst', dist: pick.distance/1000, elev: pick.height, obs};
@@ -222,6 +223,12 @@ async function loadObs(lat, lon, elev){
 /* ============ Fehler je Modell: systematische Abweichung + Treffsicherheit ============ */
 // Systematische Abweichung (z. B. „in der Stadt nachts 1,5° zu kalt“) getrennt nach Tageszeit (6 Blöcke à 4 h).
 const BINS = 6, binOf = h => Math.floor(h/4);
+// Wetterlage: klar und windstill (Wolken < 30 %, Wind < 10 km/h im Modellmittel). Dann irren die Modelle anders
+// (Kaltluft, Nebel, Inversion) – eigene Korrektur. Rückrechnung 23 Orte × 274 Tage: stündlicher Fehler 1,035° → 1,003°,
+// in klaren, ruhigen Stunden 1,17° → 1,06°; besser in allen Jahreszeiten und an 20 von 23 Orten.
+const calmOf = (cl, ws) => { const c = cl.filter(v => v != null), w = ws.filter(v => v != null);
+  return c.length >= 3 && w.length >= 3 && mean(c) < 30 && mean(w) < 10 ? 1 : 0; };
+const biasOf = (w, h, calm) => !w || !w.bias ? 0 : w.bias2 ? w.bias2[calm ? 1 : 0][binOf(h)] : w.bias[binOf(h)];
 function prepPrev(prev, obsInfo, offH){
   const H = prev.hourly, time = H.time, per = splitByModel(H, MODELS.map(m=>m.id));
   const n = time.length, obsT = new Array(n).fill(null), obsP = new Array(n).fill(null);
@@ -234,7 +241,10 @@ function prepPrev(prev, obsInfo, offH){
   const lday = time.map(t => new Date(Date.parse(t+':00Z') + offH*3600e3).toISOString().slice(0,10));
   const nowKey = new Date().toISOString().slice(0,13);
   const past = time.map(t => t.slice(0,13) < nowKey);
-  return {time, per, obsT, obsP, lh, lday, past, n};
+  const obsW = new Array(n).fill(null), obsG = new Array(n).fill(null);
+  if(obsInfo) time.forEach((t,i) => { const o = obsInfo.obs.get(t.slice(0,13)); if(o){ obsW[i] = o.w ?? null; obsG[i] = o.g ?? null; } });
+  const calm = time.map((t,i) => calmOf(MODELS.map(m => per[m.id]?.cloud_cover_previous_day1?.[i]), MODELS.map(m => per[m.id]?.wind_speed_10m_previous_day1?.[i])));
+  return {time, per, obsT, obsP, obsW, obsG, calm, lh, lday, past, n};
 }
 function statsWindow(D, i0, i1, withBias, only){
   const S = {};
@@ -250,14 +260,20 @@ function statsWindow(D, i0, i1, withBias, only){
         const e = F[i] - D.obsT[i], k = binOf(D.lh[i]); sum[k] += e; cnt[k]++; absRaw += Math.abs(e); n++; }
       if(n < 72) continue;
       const bias = withBias ? sum.map((s,k) => s/(cnt[k]+12)) : new Array(BINS).fill(0);   // gedämpft gegen Ausreißer
+      // je Wetterlage, gedämpft zur allgemeinen Korrektur hin
+      let bias2 = null;
+      if(withBias && D.calm){ const s2 = [new Array(BINS).fill(0), new Array(BINS).fill(0)], c2 = [new Array(BINS).fill(0), new Array(BINS).fill(0)];
+        for(let i=i0;i<i1;i++){ if(!D.past[i] || F[i]==null || D.obsT[i]==null) continue; const g = D.calm[i], k = binOf(D.lh[i]); s2[g][k] += F[i] - D.obsT[i]; c2[g][k]++; }
+        bias2 = [0, 1].map(g => bias.map((b,k) => (s2[g][k] + 12*b)/(c2[g][k] + 12))); }
+      const bw = {bias, bias2};
       let absC = 0;
-      for(let i=i0;i<i1;i++){ if(!D.past[i] || F[i]==null || D.obsT[i]==null) continue; absC += Math.abs(F[i] - bias[binOf(D.lh[i])] - D.obsT[i]); }
+      for(let i=i0;i<i1;i++){ if(!D.past[i] || F[i]==null || D.obsT[i]==null) continue; absC += Math.abs(F[i] - biasOf(bw, D.lh[i], D.calm[i]) - D.obsT[i]); }
       // Niederschlag: Tagessummen 8–20 Uhr
       const days = {};
       if(R) for(let i=i0;i<i1;i++){ const h = D.lh[i]; if(!D.past[i] || h<=WIN_START || h>WIN_END || R[i]==null || D.obsP[i]==null) continue;
         const d = (days[D.lday[i]] ||= {f:0, o:0, n:0}); d.f += R[i]; d.o += D.obsP[i]; d.n++; }
       const dd = Object.values(days).filter(d => d.n >= 10);
-      S[m.id][b.k] = {bias, maeRaw: absRaw/n, maeT: absC/n, maeP: dd.length >= 5 ? dd.reduce((s,d)=>s+Math.abs(d.f-d.o),0)/dd.length : null, n};
+      S[m.id][b.k] = {bias, bias2, maeRaw: absRaw/n, maeT: absC/n, maeP: dd.length >= 5 ? dd.reduce((s,d)=>s+Math.abs(d.f-d.o),0)/dd.length : null, n};
     }
   }
   return S;
@@ -333,6 +349,7 @@ function weightsFrom(S, hilly){
     W[b.k] = {};
     const mT = median(MODELS.map(m => S[m.id]?.[b.k]?.maeT)), mP = median(MODELS.map(m => S[m.id]?.[b.k]?.maeP));
     const medBias = [...Array(BINS).keys()].map(k => median(MODELS.map(m => S[m.id]?.[b.k]?.bias[k])) || 0);
+    const medBias2 = MODELS.some(m => S[m.id]?.[b.k]?.bias2) ? [0, 1].map(g => [...Array(BINS).keys()].map(k => median(MODELS.map(m => S[m.id]?.[b.k]?.bias2?.[g][k])) || 0)) : null;
     for(const m of ALL_MODELS){
       // Gelände: hochaufgelöste Modelle (ICON-D2, AROME) bilden Berge/Täler in den ersten Tagen besser ab
       const prior = m.prior * (hilly && b.k !== 'd4' && b.k !== 'd6' && ['dwd_icon_seamless','meteofrance_seamless'].includes(m.id) ? 1.3 : 1);
@@ -340,10 +357,10 @@ function weightsFrom(S, hilly){
       if(s && mT){
         const fT = clamp(Math.pow(mT/Math.max(s.maeT,0.15), 2), 0.35, 2.5);
         const fP = (s.maeP!=null && mP!=null) ? clamp(Math.pow(Math.max(mP,0.3)/Math.max(s.maeP,0.3), 2), 0.35, 2.5) : 1;
-        W[b.k][m.id] = {t: prior*fT, p: prior*fP, src:'skill', maeT:s.maeT, maeRaw:s.maeRaw, bias:s.bias};
+        W[b.k][m.id] = {t: prior*fT, p: prior*fP, src:'skill', maeT:s.maeT, maeRaw:s.maeRaw, bias:s.bias, bias2:s.bias2};
       } else {
         // ohne eigene Prüfdaten (WeatherNext): typische Abweichung der anderen Modelle übernehmen
-        W[b.k][m.id] = {t: prior, p: prior, src:'prior', bias: medBias};
+        W[b.k][m.id] = {t: prior, p: prior, src:'prior', bias: medBias, bias2: medBias2};
       }
     }
   }
@@ -352,7 +369,7 @@ function weightsFrom(S, hilly){
     if(m.mos) continue;
     const e = W.d6[m.id], b4 = W.d4[m.id] && W.d4[m.id].bias;
     W.d6[m.id] = {...e, t: LONG_W[m.id] ?? 0.03, src: e.src === 'skill' ? 'skill' : e.src, long: true,
-                  bias: b4 ? b4.map(v => v*0.7) : e.bias};
+                  bias: b4 ? b4.map(v => v*0.7) : e.bias, bias2: W.d4[m.id]?.bias2 ? W.d4[m.id].bias2.map(a => a.map(v => v*0.7)) : null};
   }
   for(const b of BUCKETS){
     const sh = MOS_SHARE[b.k], others = ALL_MODELS.filter(m => !m.mos);
@@ -438,7 +455,7 @@ async function computeAllStats(lat, lon, offSec){
         let sw=0, sv=0, sw0=0, sv0=0, raw=[];
         for(const m of MODELS){ const f = D.per[m.id]?.temperature_2m_previous_day1?.[i]; if(f==null) continue;
           raw.push(f); (per[m.id] ||= [0,0]); per[m.id][0] += Math.abs(f-o); per[m.id][1]++;
-          const w = Ww[m.id], fc = f - (w.bias? w.bias[binOf(D.lh[i])] : 0), ww = wT(w, D.lh[i]);
+          const w = Ww[m.id], fc = f - biasOf(w, D.lh[i], D.calm[i]), ww = wT(w, D.lh[i]);
           sw += ww; sv += ww*fc; sw0 += w.t; sv0 += w.t*fc; }          // neue Mischung und bisherige Gewichte im Vergleich
         if(!sw || raw.length < 3) continue;
         acc.ours[0] += Math.abs(sv/sw - o); acc.ours[1]++; acc.old[0] += Math.abs(sv0/sw0 - o); acc.old[1]++; acc.avg[0] += Math.abs(mean(raw) - o); acc.avg[1]++; used++;
@@ -511,7 +528,7 @@ async function computeAllStats(lat, lon, offSec){
         obsH.push(D.obsT[i]); obsP.push(D.obsP[i]);
         let sw=0, sv=0, pw=0, pv=0, n=0;
         for(const m of MODELS){ const w = Ww[m.id]; if(!w) continue;
-          const f = D.per[m.id]?.temperature_2m_previous_day1?.[i]; if(f!=null){ const ww = wT(w, D.lh[i]); sw += ww; sv += ww*(f - (w.bias ? w.bias[binOf(D.lh[i])] : 0)); n++; }
+          const f = D.per[m.id]?.temperature_2m_previous_day1?.[i]; if(f!=null){ const ww = wT(w, D.lh[i]); sw += ww; sv += ww*(f - biasOf(w, D.lh[i], D.calm[i])); n++; }
           const q = D.per[m.id]?.precipitation_previous_day1?.[i]; if(q!=null){ pw += w.p; pv += w.p*q; } }
         ourH.push(n >= 3 ? sv/sw : null); ourP.push(pw ? pv/pw*rk : null);
       }
@@ -541,9 +558,15 @@ async function computeAllStats(lat, lon, offSec){
       hist = {days: out.slice(-HIST_DAYS), standing};
     }
   }
+  // Wind und Böen: Faktor Messung/Modellmittel aus den letzten 30 Tagen (Rückrechnung: Fehler Wind 3,8 → 3,1 km/h, Böen 6,2 → 5,7 km/h)
+  const windF = (key, O) => { let so = 0, sm = 0, c = 0;
+    for(let i=Math.max(0, D.n - WINDOW_DAYS*24); i<D.n; i++){ if(!D.past[i] || O[i]==null) continue;
+      const v = MODELS.map(m => D.per[m.id]?.[key]?.[i]).filter(x => x != null); if(v.length < 3) continue; so += O[i]; sm += mean(v); c++; }
+    return c >= 200 && sm > 0 ? clamp(so/sm, 0.4, 2.5) : 1; };
+  const windK = station ? {w: windF('wind_speed_10m_previous_day1', D.obsW), g: windF('wind_gusts_10m_previous_day1', D.obsG)} : null;
   const XT = {};
   if(station) for(const b of BUCKETS.filter(b => b.k !== 'd6')) XT[b.k] = extStats(D, `temperature_2m_previous_day${b.off}`, D.n);
-  return {W, track, cityBias, nightBias, elev, hilly, rainK: kNow, hist, useStack, XT,
+  return {W, track, cityBias, nightBias, elev, hilly, rainK: kNow, hist, useStack, XT, windK,
           station: station ? {name:station.name, by:station.by, dist:station.dist, elev:station.elev} : null};
 }
 
@@ -608,14 +631,20 @@ function build(data){
     for(const M of Object.values(members)) M.P = M.P.map(a => a.map(x => x==null ? null : x*RK));
   }
 
-  // Ortskorrektur: systematische Abweichung je Modell, Vorlaufzeit und Tageszeit abziehen
+  // Wetterlage je Stunde aus den Rohwerten der Modelle (für die Korrektur je Wetterlage)
+  const calmF = time.map((t,i) => calmOf(avail.filter(m => !m.mos).map(m => per[m.id].cloud_cover?.[i]), avail.filter(m => !m.mos).map(m => per[m.id].wind_speed_10m?.[i])));
+  // Wind/Böen an die Station anpassen (Faktor aus den letzten 30 Tagen; MOSMIX ist bereits stationsangepasst)
+  const WK = ST && ST.windK;
+  if(WK) for(const m of avail){ if(m.mos) continue;
+    for(const [v, f] of [['wind_speed_10m', WK.w], ['wind_gusts_10m', WK.g]]){ const A = per[m.id][v]; if(A && f !== 1) per[m.id][v] = A.map(x => x==null ? null : x*f); } }
+  // Ortskorrektur: systematische Abweichung je Modell, Vorlaufzeit, Tageszeit und Wetterlage abziehen
   const raw = {};
   for(const m of avail){
     raw[m.id] = per[m.id].temperature_2m.slice();
     for(const v of ['temperature_2m','apparent_temperature']){
       const A = per[m.id][v]; if(!A) continue;
       per[m.id][v] = A.map((x,i) => { if(x==null) return null; const w = W[bucketFor(leadDay(i)).k][m.id];
-        return w && w.bias ? x - w.bias[binOf(+time[i].slice(11,13))] : x; });
+        return x - biasOf(w, +time[i].slice(11,13), calmF[i]); });
     }
   }
 
