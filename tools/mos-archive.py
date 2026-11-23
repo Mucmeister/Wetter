@@ -9,7 +9,12 @@ PLACES = {'Hilden':(51.168,6.939),'München':(48.150,11.570),'Hamburg':(53.551,9
 out = sys.argv[1]; os.makedirs(out, exist_ok=True)
 now = datetime.datetime.now(datetime.UTC)
 rec = {'run': now.strftime('%Y-%m-%dT%H:%M'), 'places': {}}
-def get(u): return json.load(urllib.request.urlopen(u, timeout=60))
+import time
+def get(u):
+    for k in range(3):
+        try: return json.load(urllib.request.urlopen(u, timeout=60))
+        except Exception as e: err = e; time.sleep(8)
+    raise err
 for n, (la, lo) in PLACES.items():
     try:
         # gleiche Stationswahl wie in der App: max. 30 km, höchstens 150 m Höhenunterschied, Station mit Daten
