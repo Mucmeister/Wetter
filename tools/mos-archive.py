@@ -27,5 +27,32 @@ for n, (la, lo) in PLACES.items():
             break
         else: print(n, 'keine passende MOSMIX-Station')
     except Exception as e: print(n, e)
+# Ensembles: Regenwahrscheinlichkeit und Spanne für Hoch/Tief je Tag (8–20 Uhr Ortszeit), für die spätere Prüfung
+ENS = ['ecmwf_ifs025_ensemble','ecmwf_aifs025_ensemble','dwd_icon_seamless_eps','google_weathernext2_ensemble']
+def q(a, p): a = sorted(a); return a[min(len(a)-1, max(0, round(p*(len(a)-1))))]
+rec['ens'] = {}
+for n, (la, lo) in PLACES.items():
+    try:
+        e = get(f'https://ensemble-api.open-meteo.com/v1/ensemble?latitude={la}&longitude={lo}&timezone=Europe/Berlin&hourly=temperature_2m,precipitation&models={",".join(ENS)}&forecast_days=7')
+        H = e['hourly']; t = H['time']; out_p = {}
+        for m in ENS:
+            keys = [k for k in H if k.startswith('temperature_2m') and m in k]
+            days = {}
+            for k in keys:
+                T = H[k]; P = H.get(k.replace('temperature_2m', 'precipitation'))
+                for d in sorted({x[:10] for x in t}):
+                    i0 = t.index(d + 'T08:00') if d + 'T08:00' in t else None
+                    if i0 is None or i0 + 12 >= len(t): continue
+                    tv = [v for v in T[i0:i0+13] if v is not None]
+                    pv = P[i0+1:i0+13] if P else []
+                    if len(tv) < 10: continue
+                    r = days.setdefault(d, {'lo': [], 'hi': [], 'p': []})
+                    r['lo'].append(min(tv)); r['hi'].append(max(tv))
+                    if pv and all(v is not None for v in pv): r['p'].append(sum(pv))
+            out_p[m] = {d: {'n': len(r['hi']), 'lo': [round(q(r['lo'],x),1) for x in (.1,.5,.9)], 'hi': [round(q(r['hi'],x),1) for x in (.1,.5,.9)],
+                            'p05': round(sum(v >= 0.5 for v in r['p'])/len(r['p']), 3) if r['p'] else None,
+                            'p01': round(sum(v >= 0.1 for v in r['p'])/len(r['p']), 3) if r['p'] else None} for d, r in days.items() if len(r['hi']) >= 5}
+        rec['ens'][n] = out_p
+    except Exception as ex: print(n, 'Ensemble', ex)
 fn = os.path.join(out, now.strftime('%Y-%m-%dT%H') + '.json')
 json.dump(rec, open(fn, 'w')); print('gespeichert', fn)
