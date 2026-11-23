@@ -1,0 +1,16 @@
+name: Rückblick analysieren
+on: workflow_dispatch
+permissions:
+  contents: write
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          set +e; mkdir out
+          npm i -s playwright@1 >/dev/null 2>&1 && npx -y playwright install --with-deps chromium >/dev/null 2>&1
+          node tools/hist-check.js > out/hist.jsonl 2> out/err.txt; tail -c 2000 out/err.txt
+          cd out && git init -q -b probe && git add -A
+          git -c user.name=bot -c user.email=bot@users.noreply.github.com commit -qm check
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" probe
