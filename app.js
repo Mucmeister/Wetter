@@ -36,7 +36,7 @@ const BUCKETS = [{k:'d1', off:1, from:0, to:1, label:'0–1'}, {k:'d2', off:2, f
 const bucketFor = d => BUCKETS.find(b => d >= b.from && d <= b.to);
 
 const DEMO = location.hash === '#demo';
-const BUILD = '2026-11-23.7';   // bei jeder Änderung erhöhen (gleich wie version.txt)
+const BUILD = '2026-11-23.8';   // bei jeder Änderung erhöhen (gleich wie version.txt)
 // Neue Version automatisch laden, sobald die App wieder geöffnet wird
 async function checkUpdate(){
   try{ const v = (await fetch('version.txt?' + Date.now(), {cache:'no-store'}).then(r => r.ok ? r.text() : '')).trim();
@@ -493,7 +493,7 @@ async function computeAllStats(lat, lon, offSec){
     }
     // Ortsabhängig: Die neue Mischung wird nur verwendet, wenn sie hier in den letzten 14 Tagen nicht schlechter war
     useStack = !(acc.old[1] && acc.old[0] < acc.ours[0]);
-    if(!useStack){ for(const k of ['d1','d2','d4']) for(const id in W[k]) delete W[k][id].tw; acc.ours = acc.old; }
+    if(!useStack){ for(const k of ['d1','d2','d4','d6']) for(const id in W[k]) delete W[k][id].tw; acc.ours = acc.old; if(station) longMix(W); }
     if(days >= 5){
       const pm = Object.entries(per).map(([id,v]) => ({id, mae:v[0]/v[1]})).sort((a,b)=>a.mae-b.mae);
       track = {days, ours: acc.ours[0]/acc.ours[1], avg: acc.avg[0]/acc.avg[1], best: pm[0], models: pm};
