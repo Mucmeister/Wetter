@@ -9,10 +9,11 @@ const PLACES = [['Hamburg', 53.551, 9.994], ['Bremen', 53.075, 8.807], ['Berlin'
     r.fulfill({response: res, body: t}); });
   for(const [name, lat, lon] of PLACES){
     const pg = await ctx.newPage(); const errs = [];
-    pg.on('pageerror', e => errs.push(String(e)));
+    pg.on('pageerror', e => errs.push(String(e))); pg.on('console', m => { if(m.type()==='error' || m.type()==='warning') errs.push(m.text().slice(0,300)); }); pg.on('requestfailed', r => errs.push('FAIL ' + r.url().slice(0,200)));
     await pg.addInitScript(([n,a,o]) => localStorage.setItem('wx:place', JSON.stringify({name:n, lat:a, lon:o})), [name, lat, lon]);
     await pg.goto('https://mucmeister.github.io/Wetter/?' + Date.now());
     for(let k=0;k<30;k++){ await pg.waitForTimeout(2000); if(await pg.evaluate(() => !!(state.res && state.res.ST && state.res.ST.hist))) break; }
+    if(!(await pg.evaluate(() => !!(window.state && state.res && state.res.ST && state.res.ST.hist)))){ console.log(JSON.stringify({name, errs: errs.slice(0,8), res: await pg.evaluate(() => !!(window.state && state.res)), html: (await pg.evaluate(() => document.body.innerText)).slice(0,300)})); await pg.close(); continue; }
     const r = await pg.evaluate(() => {
       const D = window.__D, ST = state.res.ST, hilly = window.__hilly;
       const starts = []; for(let i=1;i<D.n;i++) if(D.lh[i] === 0 && D.past[i] && i+23 < D.n && D.past[i+23]) starts.push(i);
