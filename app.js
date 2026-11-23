@@ -36,7 +36,7 @@ const BUCKETS = [{k:'d1', off:1, from:0, to:1, label:'0–1'}, {k:'d2', off:2, f
 const bucketFor = d => BUCKETS.find(b => d >= b.from && d <= b.to);
 
 const DEMO = location.hash === '#demo';
-const BUILD = '2026-11-23.5';   // bei jeder Änderung erhöhen (gleich wie version.txt)
+const BUILD = '2026-11-23.6';   // bei jeder Änderung erhöhen (gleich wie version.txt)
 // Neue Version automatisch laden, sobald die App wieder geöffnet wird
 async function checkUpdate(){
   try{ const v = (await fetch('version.txt?' + Date.now(), {cache:'no-store'}).then(r => r.ok ? r.text() : '')).trim();
@@ -208,14 +208,16 @@ async function loadObs(lat, lon, elev){
   const j = await getJSON(`https://api.brightsky.dev/weather?lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}&date=${from}&last_date=${to}&tz=Etc/UTC`, 30000);
   const src = (j.sources||[]).filter(s => s.observation_type !== 'forecast');
   // Station: höchstens 25 km entfernt und höchstens 150 m Höhenunterschied
-  const pick = src.filter(s => s.distance <= 25000 && (elev==null || s.height==null || Math.abs(s.height - elev) <= 150))
-                  .sort((a,b) => a.distance - b.distance)[0];
+  // nächste Station, für die auch wirklich Messreihen geliefert werden (manche Stationen haben nur aktuelle Werte, z. B. Köln-Stammheim)
+  const cands = src.filter(s => s.distance <= 25000 && (elev==null || s.height==null || Math.abs(s.height - elev) <= 150)).sort((a,b) => a.distance - b.distance);
+  let pick = null, same = null, obs = null;
+  for(const c of cands){
+    const sm = s => (c.dwd_station_id && s.dwd_station_id === c.dwd_station_id) || (c.wmo_station_id && s.wmo_station_id === c.wmo_station_id) || s.id === c.id;
+    const ids = new Set(src.filter(sm).map(s => s.id)), o = new Map();
+    for(const w of j.weather || []) if(ids.has(w.source_id) && w.temperature != null) o.set(w.timestamp.slice(0,13), {t:w.temperature, p:w.precipitation, w:w.wind_speed, g:w.wind_gust_speed});
+    if(o.size >= 24*10){ pick = c; same = sm; obs = o; break; }
+  }
   if(!pick) return null;
-  const same = s => (pick.dwd_station_id && s.dwd_station_id === pick.dwd_station_id) || (pick.wmo_station_id && s.wmo_station_id === pick.wmo_station_id);
-  const ids = new Set(src.filter(same).map(s => s.id));
-  const obs = new Map();
-  for(const w of j.weather || []) if(ids.has(w.source_id) && w.temperature != null) obs.set(w.timestamp.slice(0,13), {t:w.temperature, p:w.precipitation, w:w.wind_speed, g:w.wind_gust_speed});
-  if(obs.size < 24*10) return null;
   const named = src.find(s => same(s) && s.observation_type === 'historical') || pick;   // ausgeschriebener Name statt Kürzel
   return {name: named.station_name, by:'Deutscher Wetterdienst', dist: pick.distance/1000, elev: pick.height, obs};
 }
