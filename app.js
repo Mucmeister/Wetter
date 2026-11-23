@@ -36,7 +36,7 @@ const BUCKETS = [{k:'d1', off:1, from:0, to:1, label:'0–1'}, {k:'d2', off:2, f
 const bucketFor = d => BUCKETS.find(b => d >= b.from && d <= b.to);
 
 const DEMO = location.hash === '#demo';
-const BUILD = '2026-11-23.3';   // bei jeder Änderung erhöhen (gleich wie version.txt)
+const BUILD = '2026-11-23.5';   // bei jeder Änderung erhöhen (gleich wie version.txt)
 // Neue Version automatisch laden, sobald die App wieder geöffnet wird
 async function checkUpdate(){
   try{ const v = (await fetch('version.txt?' + Date.now(), {cache:'no-store'}).then(r => r.ok ? r.text() : '')).trim();
@@ -551,7 +551,9 @@ async function computeAllStats(lat, lon, offSec){
     }
     if(out.length){
       // Bilanz: mittlere Abweichung bei Hoch + Tief über die letzten 14 Tage, App-Prognose gegenüber den Modellen
-      const sc = (get) => { const e = out.map(d => { const v = get(d); return v ? Math.abs(v.tmin - d.o.tmin) + Math.abs(v.tmax - d.o.tmax) : null; }).filter(x => x != null);
+      // je Tag Platz nach derselben Regel wie in der Tagesansicht (Hoch/Tief, bei Gleichstand Niederschlag), dann Durchschnitt
+      const placeOf = (d, v) => { const cmp = histCmp(d.o), pool = [d.f, ...d.models]; return 1 + pool.filter(x => cmp(x, v) < 0).length; };
+      const sc = (get) => { const e = out.map(d => { const v = get(d); return v ? placeOf(d, v) : null; }).filter(x => x != null);
         return e.length >= Math.min(10, out.length) ? mean(e) : null; };
       const app = sc(d => d.f), others = MODELS.map(m => sc(d => d.models.find(x => x.id === m.id))).filter(x => x != null);
       const standing = out.length >= 10 && app != null && others.length >= 3 ? {place: 1 + others.filter(x => x < app).length, of: others.length + 1, days: out.length} : null;
@@ -898,6 +900,7 @@ function condition({cloud, psum, pprob, thunder, fog, temp, isDay, hourly}){
   // Anzahl Regenstriche im Symbol nach Menge: leicht / mäßig / kräftig (Tag 8–20 Uhr bzw. pro Stunde)
   const n = hourly ? (psum < 0.5 ? 1 : psum < 2.5 ? 2 : 3) : (psum < 2 ? 1 : psum < 8 ? 2 : 3);
   if(thunder >= 0.3 && (pprob>=0.35)) return {k:'thunder', txt:'Gewitter'};
+  if(wet && !snow && temp!=null && temp < 2) return {k:'sleet', txt:'Schneeregen'};   // um 1–2 °C: wie bei der Niederschlagsart (Schnee oder Regen offen)
   if(wet) return snow ? {k:'snow', txt: psum>(hourly?1.5:8)? 'Starker Schneefall':'Schnee'}
                       : {k:'rain', n, txt: psum>(hourly?2.5:10)? 'Starker Regen' : psum<(hourly?0.5:2) ? 'Leichter Regen' : 'Regen'};
   if(showers) return snow ? {k: isDay ? 'snowshower' : 'snowshowernight', txt:'Schneeschauer möglich'} : {k: isDay ? 'showers' : 'showersnight', n: Math.min(n, 2), txt:'Schauer möglich'};
@@ -1015,7 +1018,7 @@ function render(place, R){
     const dot = i===0 && !afterWin && c.temp!=null ? `<b style="left:calc(${clamp((c.temp-gMin)/span*100,0,100)}% - 4.5px)"></b>` : '';
     const pp = d.pprob>=0.15 ? DROPSYM + Math.round(d.pprob*10)*10+'%' + (d.psum >= 0.1 ? `<span class="amt">${d.psum < 10 ? fmt1(d.psum) : Math.round(d.psum)} mm</span>` : '') : '';
     // „unsicher“ nur in den ersten 6 Tagen: danach ist jede Vorhersage unsicher, der Hinweis wäre nur Rauschen
-    const night = d.range && i <= 5 && d.range.width >= 4.5 + 0.6*Math.max(0, i-2) ? `<div class="nightrain unsure">unsicher</div>`
+    const sl = sureOf(d), night = sl && i > 0 && ['bad','vbad'].includes(sl[0]) ? `<div class="nightrain unsure">${sl[1]}</div>`
                 : d.nightP!=null && d.nightP>=1 && d.pprob < 0.3 && d.psum < 0.5 ? `<div class="nightrain">Niederschlag nachts</div>` : '';
     return `<div class="row" data-i="${i}"><div class="d">${dayName(d.d,i)}${night}</div>${icon(d.cond.k, d.cond.n)}<div class="pp">${pp}</div>
       <div class="mn">${r0(d.tmin)}°</div><div class="bar"><i style="left:${l}%;width:${Math.max(w,3)}%;background:${grad}"></i>${dot}</div><div class="mx">${r0(d.tmax)}°</div></div>
@@ -1096,7 +1099,7 @@ function render(place, R){
       <p><b>Fehler:</b> So weit lag das Modell hier in den letzten 4 Wochen im Schnitt daneben (Temperatur für den nächsten Tag, nach Ortskorrektur).</p>
       <p><b>Anteil:</b> wie stark das Modell in die App-Prognose eingeht. In den ersten Tagen zählt die Mischung, die hier zuletzt am besten traf, getrennt für Tag und Nacht. Ab Tag 6 zählt vor allem ECMWF AIFS, langfristig das stärkste Modell für Deutschland.</p>
       <p><b>Tageswerte</b> gelten für 8–20 Uhr. Tippe auf einen Tag für Details und alle Modelle.</p>
-      <p><b>Niederschlagswahrscheinlichkeit und Spannen</b> stammen aus ${Object.values(R.members).reduce((s,m)=>s+m.P.length,0)} leicht variierten Rechenläufen von Google, ECMWF und DWD.${R.ST && R.ST.elev!=null ? ` Ort auf ${Math.round(R.ST.elev)} m Höhe${R.ST.hilly? '; im bergigen Gelände zählen fein aufgelöste Modelle (ICON-D2, AROME) in den ersten Tagen mehr':''}.`:''}</p>
+      <p><b>Niederschlagswahrscheinlichkeit und Spannen</b> stammen aus ${Object.values(R.members).reduce((s,m)=>s+m.P.length,0)} leicht variierten Rechenläufen von Google, ECMWF und DWD. Die Sicherheit der Temperatur richtet sich nach der Breite der Spanne, in der 8 von 10 Läufen liegen: bis 1,5° sehr sicher, bis 3° sicher, bis 4,5° etwas unsicher, bis 6° unsicher, darüber sehr unsicher (für heute keine Angabe).${R.ST && R.ST.elev!=null ? ` Ort auf ${Math.round(R.ST.elev)} m Höhe${R.ST.hilly? '; im bergigen Gelände zählen fein aufgelöste Modelle (ICON-D2, AROME) in den ersten Tagen mehr':''}.`:''}</p>
       <p class="muted">Google WeatherNext liefert keine Archivdaten; es geht mit festem Anteil ein und erhält die durchschnittliche Ortskorrektur der anderen Modelle.</p>
       ${R.per[MOS.id] && R.mos ? `<p class="muted"><b>DWD MOSMIX</b> ist keine eigene Modellrechnung, sondern die vom Deutschen Wetterdienst statistisch an Messstationen angepasste Vorhersage (Station ${esc(umlaut(String(R.mos.src.name).toLowerCase().replace(/(^|[\s-])\S/g, c => c.toUpperCase())))}, ${fmt1(R.mos.src.dist)} km). Für sie gibt es noch keine Archivdaten zur Prüfung; bis dahin zählt sie wie ein durchschnittliches Modell (rund 11 %).</p>` : ''}
     </div>
@@ -1179,6 +1182,13 @@ function histChart(d){
   return `<svg class="histchart" viewBox="0 0 ${W} ${Hb+16}">${win}${grid}${pgrid}${pbars}${line(d.ourH, 'stroke="#d9b26f" stroke-width="2" stroke-dasharray="5 4"')}${line(d.obsH, 'stroke="#f3eee4" stroke-width="2.4" stroke-linejoin="round"')}${ticks}</svg>
     <div class="histleg"><span><i class="m"></i>gemessen</span><span><i class="f"></i>App-Prognose vom Vortag</span>${wetDay ? '<span><i class="r"></i>Niederschlag an der Wetterstation gemessen</span>' : '<span>kein Niederschlag</span>'}</div>`;
 }
+// Rangregel im Rückblick: zuerst Hoch+Tief (gerundet), bei Gleichstand Niederschlag (0,1 mm), dann exakte Temperatur-Abweichung
+function histCmp(o){
+  const err = m => Math.abs(m.tmax - o.tmax) + Math.abs(m.tmin - o.tmin);
+  const re = m => Math.abs(r0(m.tmax) - r0(o.tmax)) + Math.abs(r0(m.tmin) - r0(o.tmin));
+  const rr = m => m.rain == null || o.rain == null ? Infinity : Math.abs(Math.round(m.rain*10) - Math.round(o.rain*10));
+  return (a, b) => re(a) - re(b) || rr(a) - rr(b) || err(a) - err(b);
+}
 function histDetail(H, k){
   const d = H.days[k], o = d.o, f = d.f, st = state.res.ST.station;
   const mm = v => v == null ? '–' : v < 0.05 ? 'trocken' : fmt1(v) + ' mm';
@@ -1191,11 +1201,7 @@ function histDetail(H, k){
   const err = m => Math.abs(m.tmax - o.tmax) + Math.abs(m.tmin - o.tmin);
   // Platzierung nach Treffsicherheit (Abweichung bei Hoch + Tief), die App-Prognose zählt mit
   // Platz = 1 + Anzahl der Vorhersagen, die echt besser lagen (gleich gute teilen sich den Platz)
-  const re = m => Math.abs(r0(m.tmax) - r0(o.tmax)) + Math.abs(r0(m.tmin) - r0(o.tmin));
-  // bei gleicher Temperatur-Abweichung entscheidet die Niederschlagsmenge (auf 0,1 mm gerundet)
-  // danach die genaue (ungerundete) Temperatur-Abweichung, sodass gleiche Plätze praktisch nicht mehr vorkommen
-  const rr = m => m.rain == null || o.rain == null ? Infinity : Math.abs(Math.round(m.rain*10) - Math.round(o.rain*10));
-  const cmp = (a, b) => re(a) - re(b) || rr(a) - rr(b) || err(a) - err(b);
+  const cmp = histCmp(o);
   const appM = {tmin:f.tmin, tmax:f.tmax, rain:f.rain}, pool = [appM, ...d.models];
   const place = m => { const k = 1 + pool.filter(x => cmp(x, m) < 0).length; return k <= 3 ? `<i class="rank r${k}">${k}</i>` : '<i class="rank"></i>'; };
   const rows = d.models.slice().sort((a,b) => cmp(a, b) || err(a) - err(b)).map(m => `<div class="hrow"><div class="n">${place(m)}${mLabel(MODELS.find(x => x.id === m.id) || {id:m.id, name:nm(m.id)})}</div><div>${r0(m.tmin)}°</div><div>${r0(m.tmax)}°</div><div>${m.rain == null ? '–' : fmt1(m.rain)}</div></div>`).join('');
@@ -1203,7 +1209,7 @@ function histDetail(H, k){
   return `${nav}
     ${histChart(d)}
     <div class="dline">App-Prognose: Höchstwert ${dv(f.tmax, o.tmax)}, Tiefstwert ${dv(f.tmin, o.tmin)}${rainV ? ', ' + rainV : ''}.</div>
-    ${H.standing ? `<div class="dline" style="margin-top:6px">Bilanz der letzten ${H.standing.days} Tage (Hoch und Tief): App-Prognose auf <b>Platz ${H.standing.place} von ${H.standing.of}</b>.</div>` : ''}
+    ${H.standing ? `<div class="dline" style="margin-top:6px">Bilanz der letzten ${H.standing.days} Tage: App-Prognose auf <b>Platz ${H.standing.place} von ${H.standing.of}</b> <span>(Durchschnitt der Tagesplätze, gleiche Regel wie unten)</span>.</div>` : ''}
     <div class="dsec">Vorhersagen vom Vortag (8–20 Uhr)</div>
     <div class="hrow head"><div class="n"></div><div>Tief</div><div>Hoch</div><div>mm</div></div>
     <div class="hrow obs"><div class="n"><i class="rank"></i>Gemessen</div><div>${r0(o.tmin)}°</div><div>${r0(o.tmax)}°</div><div>${o.rain == null ? '–' : fmt1(o.rain)}</div></div>
@@ -1327,11 +1333,13 @@ function swipeFavs(){
   });
 }
 
+// Sicherheit der Temperatur: Breite der Spanne, in der 8 von 10 Rechenläufen liegen (die größere von Hoch und Tief)
+const SURE = [[1.5,'vgood','sehr sicher'], [3,'good','sicher'], [4.5,'mid','etwas unsicher'], [6,'bad','unsicher'], [Infinity,'vbad','sehr unsicher']];
+const sureOf = d => d.range ? SURE.find(x => Math.max(d.range.width, d.range.lo[1] - d.range.lo[0]) <= x[0]).slice(1) : null;
 function certainty(d){
   const parts = [];
-  if(d.range){
-    const w = d.range.width;
-    const cls = w < 3 ? ['good','ziemlich sicher'] : w < 5 ? ['mid','etwas unsicher'] : ['bad','unsicher'];
+  if(d.range && d.di > 0){          // heute ist die Temperatur praktisch immer sicher: keine Angabe
+    const cls = sureOf(d);
     parts.push(`<div class="dline" style="margin-bottom:4px"><span class="sure ${cls[0]}">Temperatur ${cls[1]}</span></div>`);
     parts.push(`<div class="dline">Höchstwert wahrscheinlich ${r0(d.range.hi[0])}° bis ${r0(d.range.hi[1])}°, Tiefstwert ${r0(d.range.lo[0])}° bis ${r0(d.range.lo[1])}° <span>(8–20 Uhr)</span></div>`);
   }
