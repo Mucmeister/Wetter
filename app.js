@@ -36,7 +36,7 @@ const BUCKETS = [{k:'d1', off:1, from:0, to:1, label:'0–1'}, {k:'d2', off:2, f
 const bucketFor = d => BUCKETS.find(b => d >= b.from && d <= b.to);
 
 const DEMO = location.hash === '#demo';
-const BUILD = '2026-11-23.8';   // bei jeder Änderung erhöhen (gleich wie version.txt)
+const BUILD = '2026-11-23.9';   // bei jeder Änderung erhöhen (gleich wie version.txt)
 // Neue Version automatisch laden, sobald die App wieder geöffnet wird
 async function checkUpdate(){
   try{ const v = (await fetch('version.txt?' + Date.now(), {cache:'no-store'}).then(r => r.ok ? r.text() : '')).trim();
@@ -829,8 +829,14 @@ function build(data){
       let ps=0, pn=0; if(P) for(let i=iS+1;i<=iE;i++) if(P[i]!=null){ps+=P[i];pn++;}
       return {m, tmax: tw.length? Math.max(...tw):null, tmin: tw.length? Math.min(...tw):null, psum: pn? ps:null, w: W[b][m.id]};
     }).filter(x=>x.tmax!=null);
-    const wsum = byModel.reduce((s,x)=>s+x.w.t,0);
-    byModel.forEach(x => x.share = x.w.t/wsum);
+    // tatsächlicher Anteil: Stundengewichte (Tag/Nacht, Vorlauf) über 8–20 Uhr gemittelt
+    byModel.forEach(x => x.share = 0); let nh = 0;
+    for(let i=iS;i<=iE;i++){
+      const hb = bucketFor(leadDay(i)).k, hr = +time[i].slice(11,13);
+      const ws = byModel.map(x => per[x.m.id].temperature_2m[i] != null && W[hb][x.m.id] ? wT(W[hb][x.m.id], hr) : 0), t = ws.reduce((a,c)=>a+c,0);
+      if(t > 0){ byModel.forEach((x,j) => x.share += ws[j]/t); nh++; }
+    }
+    if(nh) byModel.forEach(x => x.share /= nh);
     const sd = Math.sqrt(mean(byModel.map(x => (x.tmax - tmax)**2)) || 0);
     const minT = Math.min(...win.map(h=>h.temp));
     // Spanne aus den Ensembles (10–90 %), auf den Konsens zentriert
