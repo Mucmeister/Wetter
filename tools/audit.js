@@ -26,9 +26,8 @@
     const sh = [...det.querySelectorAll('.mrow:not(.head):not(.cons) .infl span')].map(x => num(x.innerText));
     if(sh.length){ const s = sh.reduce((a,b)=>a+b,0); if(Math.abs(s - 100) > 3) add(lab, `Anteile ergeben ${s} %`); }
     if(['snow','snowshower','snowshowernight','sleet'].includes(d.cond.k) && /\bRegen\b/.test(dtx)) add(lab, 'Schnee-Tag, aber „Regen“ im Detail');
-    const us = row.querySelector('.unsure'), badge = det.querySelector('.sure');
+    const us = row.querySelector('.unsure'), badge = [...det.querySelectorAll('.sure')].find(x => x.innerText.startsWith('Temperatur'));
     if(us && (!badge || !badge.innerText.endsWith(us.innerText))) add(lab, `Zeile „${us.innerText}“, Detail „${badge ? badge.innerText : '–'}“`);
-    if(i === 0 && badge) add(lab, 'Sicherheits-Angabe für heute');
     const pp = row.querySelector('.pp').innerText.match(/(\d+)%/); if(pp && (+pp[1] < 0 || +pp[1] > 100)) add(lab, 'Prozent ' + pp[1]);
   });
   // Stunden: nachts keine Sonne

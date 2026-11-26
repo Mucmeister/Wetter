@@ -36,7 +36,7 @@ const BUCKETS = [{k:'d1', off:1, from:0, to:1, label:'0–1'}, {k:'d2', off:2, f
 const bucketFor = d => BUCKETS.find(b => d >= b.from && d <= b.to);
 
 const DEMO = location.hash === '#demo';
-const BUILD = '2026-11-23.9';   // bei jeder Änderung erhöhen (gleich wie version.txt)
+const BUILD = '2026-11-26.1';   // bei jeder Änderung erhöhen (gleich wie version.txt)
 // Neue Version automatisch laden, sobald die App wieder geöffnet wird
 async function checkUpdate(){
   try{ const v = (await fetch('version.txt?' + Date.now(), {cache:'no-store'}).then(r => r.ok ? r.text() : '')).trim();
@@ -1121,7 +1121,7 @@ function render(place, R){
       <p><b>Fehler:</b> So weit lag das Modell hier in den letzten 4 Wochen im Schnitt daneben (Temperatur für den nächsten Tag, nach Ortskorrektur).</p>
       <p><b>Anteil:</b> wie stark das Modell in die App-Prognose eingeht. In den ersten Tagen zählt die Mischung, die hier zuletzt am besten traf, getrennt für Tag und Nacht. Ab Tag 4 zählt je zur Hälfte diese örtliche Mischung und die langfristig beste Gewichtung für Deutschland (vorn ECMWF AIFS). Das traf in der Rückrechnung an 23 Orten besser als jede der beiden allein. „Tag“ meint dabei Stunden ab jetzt: Tag 4 beginnt 4 × 24 Stunden später.</p>
       <p><b>Tageswerte</b> gelten für 8–20 Uhr. Tippe auf einen Tag für Details und alle Modelle.</p>
-      <p><b>Niederschlagswahrscheinlichkeit und Spannen</b> stammen aus ${Object.values(R.members).reduce((s,m)=>s+m.P.length,0)} leicht variierten Rechenläufen von Google, ECMWF und DWD. Die Sicherheit der Temperatur richtet sich nach der Breite der Spanne, in der 8 von 10 Läufen liegen: bis 1,5° sehr sicher, bis 3° sicher, bis 4,5° etwas unsicher, bis 6° unsicher, darüber sehr unsicher (für heute keine Angabe).${R.ST && R.ST.elev!=null ? ` Ort auf ${Math.round(R.ST.elev)} m Höhe${R.ST.hilly? '; im bergigen Gelände zählen fein aufgelöste Modelle (ICON-D2, AROME) in den ersten Tagen mehr':''}.`:''}</p>
+      <p><b>Niederschlagswahrscheinlichkeit und Spannen</b> stammen aus ${Object.values(R.members).reduce((s,m)=>s+m.P.length,0)} leicht variierten Rechenläufen von Google, ECMWF und DWD. Die Sicherheit der Temperatur richtet sich nach der Breite der Spanne, in der 8 von 10 Läufen liegen: bis 1,5° sehr sicher, bis 3° sicher, bis 4,5° etwas unsicher, bis 6° unsicher, darüber sehr unsicher. Beim Niederschlag zählt, wie klar die Wahrscheinlichkeit zu „ja“ oder „nein“ neigt: ab 90 % bzw. bis 10 % sehr sicher, ab 80 %/bis 20 % sicher, ab 65 %/bis 35 % etwas unsicher, dazwischen unsicher.${R.ST && R.ST.elev!=null ? ` Ort auf ${Math.round(R.ST.elev)} m Höhe${R.ST.hilly? '; im bergigen Gelände zählen fein aufgelöste Modelle (ICON-D2, AROME) in den ersten Tagen mehr':''}.`:''}</p>
       <p class="muted">Google WeatherNext liefert keine Archivdaten; es geht mit festem Anteil ein und erhält die durchschnittliche Ortskorrektur der anderen Modelle.</p>
       ${R.per[MOS.id] && R.mos ? `<p class="muted"><b>DWD MOSMIX</b> ist keine eigene Modellrechnung, sondern die vom Deutschen Wetterdienst statistisch an Messstationen angepasste Vorhersage (Station ${esc(umlaut(String(R.mos.src.name).toLowerCase().replace(/(^|[\s-])\S/g, c => c.toUpperCase())))}, ${fmt1(R.mos.src.dist)} km). Für sie gibt es noch keine Archivdaten zur Prüfung; bis dahin zählt sie wie ein durchschnittliches Modell (rund 11 %).</p>` : ''}
     </div>
@@ -1358,11 +1358,15 @@ function swipeFavs(){
 // Sicherheit der Temperatur: Breite der Spanne, in der 8 von 10 Rechenläufen liegen (die größere von Hoch und Tief)
 const SURE = [[1.5,'vgood','sehr sicher'], [3,'good','sicher'], [4.5,'mid','etwas unsicher'], [6,'bad','unsicher'], [Infinity,'vbad','sehr unsicher']];
 const sureOf = d => d.range ? SURE.find(x => Math.max(d.range.width, d.range.lo[1] - d.range.lo[0]) <= x[0]).slice(1) : null;
+// Sicherheit beim Niederschlag: wie klar die Wahrscheinlichkeit (8–20 Uhr) zu „ja“ oder „nein“ tendiert
+const PSURE = [[0.9,'vgood','sehr sicher'], [0.8,'good','sicher'], [0.65,'mid','etwas unsicher'], [0,'bad','unsicher']];
+const psureOf = d => { const p = Math.round(d.pprob*10)/10, a = Math.max(p, 1 - p); return PSURE.find(x => a >= x[0]).slice(1); };
 function certainty(d){
-  const parts = [];
-  if(d.range && d.di > 0){          // heute ist die Temperatur praktisch immer sicher: keine Angabe
-    const cls = sureOf(d);
-    parts.push(`<div class="dline" style="margin-bottom:4px"><span class="sure ${cls[0]}">Temperatur ${cls[1]}</span></div>`);
+  const parts = [], badges = [];
+  if(d.range){ const c = sureOf(d); badges.push(`<span class="sure ${c[0]}">Temperatur ${c[1]}</span>`); }
+  if(d.pprob != null){ const c = psureOf(d); badges.push(`<span class="sure ${c[0]}">Niederschlag ${c[1]}</span>`); }
+  if(badges.length) parts.push(`<div class="dline sures">${badges.join('')}</div>`);
+  if(d.range){
     parts.push(`<div class="dline">Höchstwert wahrscheinlich ${r0(d.range.hi[0])}° bis ${r0(d.range.hi[1])}°, Tiefstwert ${r0(d.range.lo[0])}° bis ${r0(d.range.lo[1])}° <span>(8–20 Uhr)</span></div>`);
   }
   const wet = d.byModel.filter(x => x.psum != null && x.psum >= 1), dry = d.byModel.filter(x => x.psum != null && x.psum < 0.2);
