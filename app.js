@@ -36,7 +36,7 @@ const BUCKETS = [{k:'d1', off:1, from:0, to:1, label:'0–1'}, {k:'d2', off:2, f
 const bucketFor = d => BUCKETS.find(b => d >= b.from && d <= b.to);
 
 const DEMO = location.hash === '#demo';
-const BUILD = '2026-11-26.1';   // bei jeder Änderung erhöhen (gleich wie version.txt)
+const BUILD = '2026-11-26.2';   // bei jeder Änderung erhöhen (gleich wie version.txt)
 // Neue Version automatisch laden, sobald die App wieder geöffnet wird
 async function checkUpdate(){
   try{ const v = (await fetch('version.txt?' + Date.now(), {cache:'no-store'}).then(r => r.ok ? r.text() : '')).trim();
@@ -1038,7 +1038,7 @@ function render(place, R){
     const l = (d.tmin-gMin)/span*100, w = (d.tmax-d.tmin)/span*100;
     const grad = `linear-gradient(90deg, ${tempColor(d.tmin)}, ${tempColor(d.tmax)})`;
     const dot = i===0 && !afterWin && c.temp!=null ? `<b style="left:calc(${clamp((c.temp-gMin)/span*100,0,100)}% - 4.5px)"></b>` : '';
-    const pp = d.pprob>=0.15 ? DROPSYM + Math.round(d.pprob*10)*10+'%' + (d.psum >= 0.1 ? `<span class="amt">${d.psum < 10 ? fmt1(d.psum) : Math.round(d.psum)} mm</span>` : '') : '';
+    const pp = d.pprob>=0.15 ? DROPSYM + Math.round(d.pprob*10)*10+'%' + (d.psum >= 0.1 ? `<span class="amt">${fmt1(d.psum)} mm</span>` : '') : '';
     // „unsicher“ nur in den ersten 6 Tagen: danach ist jede Vorhersage unsicher, der Hinweis wäre nur Rauschen
     const sl = sureOf(d), night = sl && i > 0 && ['bad','vbad'].includes(sl[0]) ? `<div class="nightrain unsure">${sl[1]}</div>`
                 : d.nightP!=null && d.nightP>=1 && d.pprob < 0.3 && d.psum < 0.5 ? `<div class="nightrain">Niederschlag nachts</div>` : '';
@@ -1152,7 +1152,7 @@ function histRow(R, gMin, gMax){
   const d = H.days[H.days.length-1], o = d.o, span = Math.max(1, gMax - gMin);
   const yest = new Date(Date.parse(R.days[0].d + 'T12:00:00Z') - 864e5).toISOString().slice(0,10);
   const l = clamp((o.tmin-gMin)/span*100, 0, 100), w = clamp((o.tmax-o.tmin)/span*100, 3, 100 - l);
-  const rain = o.rain != null && o.rain >= 0.1 ? `<span class="amt">${o.rain < 10 ? fmt1(o.rain) : Math.round(o.rain)} mm</span>` : '';
+  const rain = o.rain != null && o.rain >= 0.1 ? `<span class="amt">${fmt1(o.rain)} mm</span>` : '';
   return `<div class="row past"><div class="d">${d.d === yest ? 'Gestern' : WD[new Date(d.d+'T12:00:00Z').getUTCDay()]}<div class="nightrain">gemessen</div></div><div class="ist"></div><div class="pp">${rain}</div>
     <div class="mn">${r0(o.tmin)}°</div><div class="bar"><i style="left:${l}%;width:${w}%;background:linear-gradient(90deg,${tempColor(o.tmin)},${tempColor(o.tmax)})"></i></div><div class="mx">${r0(o.tmax)}°</div></div>
     <div class="detail" id="detH"></div>`;
